@@ -1,0 +1,180 @@
+import { app, type ToolId } from './state';
+import { BLEND_MODES, type Layer } from './doc';
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+const svg = (p: string) => `<svg viewBox="0 0 24 24">${p}</svg>`;
+
+const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
+  { id: 'move', key: 'V', label: 'Move', icon: svg('<path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/>') },
+  { id: 'marquee', key: 'M', label: 'Rectangular Marquee', icon: svg('<rect x="4" y="4" width="16" height="16" stroke-dasharray="3 3"/>') },
+  { id: 'brush', key: 'B', label: 'Brush', icon: svg('<path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 114.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 00-3-3.02z"/>') },
+  { id: 'eraser', key: 'E', label: 'Eraser', icon: svg('<path d="M20 20H8l-4.6-4.6a1.4 1.4 0 010-2L13 3.8a1.4 1.4 0 012 0l5.6 5.6a1.4 1.4 0 010 2L11 21"/><path d="M7 11l6 6"/>') },
+  { id: 'bucket', key: 'G', label: 'Paint Bucket', icon: svg('<path d="M19 11l-8-8-8.6 8.6a2 2 0 000 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11z"/><path d="M5 2l5 5M2 13h15"/><path d="M22 20a2 2 0 11-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4z"/>') },
+  { id: 'gradient', key: 'D', label: 'Gradient', icon: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 17L17 7" stroke-dasharray="1 3"/>') },
+  { id: 'eyedropper', key: 'I', label: 'Eyedropper', icon: svg('<path d="M2 22l1-1h3l9-9M3 21v-3l9-9"/><path d="M15 6l3.4-3.4a2.1 2.1 0 013 3L18 9l.4.4a2.1 2.1 0 11-3 3l-3.8-3.8a2.1 2.1 0 113-3L15 6z"/>') },
+  { id: 'hand', key: 'H', label: 'Hand (or hold Space)', icon: svg('<path d="M18 11V6a2 2 0 00-4 0M14 10V4a2 2 0 00-4 0v2M10 10.5V6a2 2 0 00-4 0v8"/><path d="M18 8a2 2 0 114 0v6a8 8 0 01-8 8h-2c-2.8 0-4.5-.9-5.9-2.4L3.4 16a2 2 0 013-2.8L8 15"/>') },
+];
+export const toolKeys: Record<string, ToolId> = Object.fromEntries(TOOLS.map((t) => [t.key.toLowerCase(), t.id]));
+
+export function initToolbar() {
+  const bar = $('toolbar');
+  for (const t of TOOLS) {
+    const el = document.createElement('div');
+    el.className = 'tool'; el.dataset.tool = t.id; el.title = `${t.label} (${t.key})`; el.innerHTML = t.icon;
+    el.onclick = () => app.setTool(t.id);
+    bar.append(el);
+  }
+  const sw = document.createElement('div');
+  sw.className = 'swatches';
+  sw.innerHTML = `<input type="color" class="bg" id="bgc" title="Background color"><input type="color" class="fg" id="fgc" title="Foreground color"><span class="swap" title="Swap (X)">⇄</span>`;
+  bar.append(sw);
+  const fg = sw.querySelector('#fgc') as HTMLInputElement, bg = sw.querySelector('#bgc') as HTMLInputElement;
+  fg.oninput = () => app.setFg(fg.value); bg.oninput = () => app.setBg(bg.value);
+  (sw.querySelector('.swap') as HTMLElement).onclick = () => app.swapColors();
+  const sync = () => { fg.value = app.fg; bg.value = app.bg; };
+  app.on('color', sync); sync();
+  const hl = () => bar.querySelectorAll('.tool').forEach((el) => el.classList.toggle('active', (el as HTMLElement).dataset.tool === app.toolId));
+  app.on('tool', hl); hl();
+}
+
+// ---------------------------------------------------------------- options bar
+function slider(label: string, get: () => number, set: (v: number) => void, min: number, max: number, step = 1, fmt = (v: number) => String(v)) {
+  const wrap = document.createElement('label');
+  const out = document.createElement('b'); out.textContent = fmt(get());
+  const inp = document.createElement('input'); inp.type = 'range'; inp.min = String(min); inp.max = String(max); inp.step = String(step); inp.value = String(get());
+  inp.oninput = () => { set(Number(inp.value)); out.textContent = fmt(Number(inp.value)); app.emit('options'); };
+  wrap.append(label, inp, out);
+  return wrap;
+}
+export function renderOptions() {
+  const el = $('options'); el.innerHTML = '';
+  const t = app.toolId, b = app.brush;
+  const pct = (v: number) => Math.round(v * 100) + '%';
+  if (t === 'brush' || t === 'eraser') {
+    el.append(slider('Size', () => b.size, (v) => (b.size = v), 1, 500, 1, (v) => v + 'px'),
+      slider('Hardness', () => b.hardness, (v) => (b.hardness = v), 0, 1, 0.01, pct),
+      slider('Opacity', () => b.opacity, (v) => (b.opacity = v), 0.01, 1, 0.01, pct),
+      slider('Flow', () => b.flow, (v) => (b.flow = v), 0.01, 1, 0.01, pct),
+      slider('Spacing', () => b.spacing, (v) => (b.spacing = v), 0.02, 1, 0.01, pct));
+  } else if (t === 'bucket') {
+    el.append(slider('Tolerance', () => app.fill.tolerance, (v) => (app.fill.tolerance = v), 0, 255),
+      slider('Opacity', () => b.opacity, (v) => (b.opacity = v), 0.01, 1, 0.01, pct));
+    const l = document.createElement('label'); const c = document.createElement('input'); c.type = 'checkbox'; c.checked = app.fill.contiguous;
+    c.onchange = () => (app.fill.contiguous = c.checked); l.append(c, 'Contiguous'); el.append(l);
+  } else if (t === 'gradient') {
+    const l = document.createElement('label'); const s = document.createElement('select');
+    s.innerHTML = '<option value="fg-bg">Foreground → Background</option><option value="fg-transparent">Foreground → Transparent</option>';
+    s.value = app.gradient.mode; s.onchange = () => (app.gradient.mode = s.value as any); l.append('Mode', s); el.append(l);
+    el.append(slider('Opacity', () => b.opacity, (v) => (b.opacity = v), 0.01, 1, 0.01, pct));
+  } else {
+    const hint = document.createElement('span');
+    hint.style.color = 'var(--dim)';
+    hint.textContent = ({ move: 'Drag to move the active layer (or the selected pixels).', marquee: 'Drag to select. Selection limits painting, fills and filters.', eyedropper: 'Click to pick foreground color. Alt+click for background.', hand: 'Drag to pan. Scroll wheel zooms.' } as Record<string, string>)[t] ?? '';
+    el.append(hint);
+  }
+}
+
+// ---------------------------------------------------------------- layers panel
+export function initPanels() {
+  $('layerpanel').innerHTML = `<h3>Layers</h3>
+    <div class="lprops">
+      <span>Opacity</span><input type="range" id="lop" min="0" max="100"><span id="lopv"></span>
+      <span>Blend</span><select id="lblend"></select>
+    </div>
+    <div id="layerlist"></div>
+    <div class="lbtns">
+      <button id="lnew" title="New layer (Ctrl+Shift+N)">＋</button><button id="ldup" title="Duplicate (Ctrl+J)">⧉</button>
+      <button id="lup" title="Move up">▲</button><button id="ldown" title="Move down">▼</button>
+      <button id="lmerge" title="Merge down (Ctrl+E)">⤓</button><button id="ldel" title="Delete layer">🗑</button>
+    </div>`;
+  const sel = $<HTMLSelectElement>('lblend');
+  sel.innerHTML = BLEND_MODES.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
+  const op = $<HTMLInputElement>('lop');
+  let startOpacity = 1;
+  op.onpointerdown = () => (startOpacity = app.doc.active.opacity);
+  op.oninput = () => { app.doc.active.opacity = Number(op.value) / 100; $('lopv').textContent = op.value + '%'; app.doc.emit('pixels'); };
+  op.onchange = () => app.doc.setProp(app.doc.active, 'opacity', Number(op.value) / 100, startOpacity);
+  sel.onchange = () => app.doc.setProp(app.doc.active, 'blend', sel.value);
+  $('lnew').onclick = () => app.doc.addLayer();
+  $('ldup').onclick = () => app.doc.duplicateLayer();
+  $('ldel').onclick = () => app.doc.removeLayer();
+  $('lmerge').onclick = () => app.doc.mergeDown();
+  $('lup').onclick = () => { const d = app.doc, i = d.layers.indexOf(d.active); d.moveLayer(i, i + 1); };
+  $('ldown').onclick = () => { const d = app.doc, i = d.layers.indexOf(d.active); d.moveLayer(i, i - 1); };
+  $('historypanel').innerHTML = `<h3>History</h3><div id="hlist"></div>`;
+}
+
+function thumb(l: Layer) {
+  const c = document.createElement('canvas');
+  const s = Math.min(1, 80 / l.canvas.width, 64 / l.canvas.height);
+  c.width = Math.max(1, Math.round(l.canvas.width * s)); c.height = Math.max(1, Math.round(l.canvas.height * s));
+  c.getContext('2d')!.drawImage(l.canvas, 0, 0, c.width, c.height);
+  return c;
+}
+
+export function renderLayers() {
+  const doc = app.doc, list = $('layerlist');
+  list.innerHTML = '';
+  [...doc.layers].reverse().forEach((l) => {
+    const row = document.createElement('div');
+    row.className = 'layer' + (l === doc.active ? ' active' : '');
+    row.draggable = true;
+    const eye = document.createElement('span'); eye.className = 'eye' + (l.visible ? '' : ' off'); eye.textContent = '👁';
+    eye.onclick = (e) => { e.stopPropagation(); doc.setProp(l, 'visible', !l.visible); };
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = l.name; name.title = l.name;
+    name.ondblclick = () => {
+      const inp = document.createElement('input'); inp.type = 'text'; inp.value = l.name;
+      name.textContent = ''; name.append(inp); inp.focus(); inp.select();
+      const done = () => { const v = inp.value.trim(); if (v && v !== l.name) doc.setProp(l, 'name', v); else renderLayers(); };
+      inp.onblur = done; inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { inp.value = l.name; inp.blur(); } };
+    };
+    row.onclick = () => doc.select(l);
+    row.ondragstart = (e) => e.dataTransfer!.setData('text/layer', String(doc.layers.indexOf(l)));
+    row.ondragover = (e) => { if (e.dataTransfer!.types.includes('text/layer')) { e.preventDefault(); row.classList.add('dragover'); } };
+    row.ondragleave = () => row.classList.remove('dragover');
+    row.ondrop = (e) => { e.preventDefault(); row.classList.remove('dragover'); doc.moveLayer(Number(e.dataTransfer!.getData('text/layer')), doc.layers.indexOf(l)); };
+    row.append(eye, thumb(l), name);
+    list.append(row);
+  });
+  const a = doc.active;
+  $<HTMLInputElement>('lop').value = String(Math.round(a.opacity * 100));
+  $('lopv').textContent = Math.round(a.opacity * 100) + '%';
+  $<HTMLSelectElement>('lblend').value = BLEND_MODES.some((m) => m.id === a.blend) ? a.blend : 'normal';
+}
+
+// ---------------------------------------------------------------- tabs & status
+export function renderTabs(switchTo: (i: number) => void, close: (i: number) => void) {
+  const tabs = $('tabs'); tabs.innerHTML = '';
+  app.docs.forEach((d, i) => {
+    const t = document.createElement('div');
+    t.className = 'tab' + (d === app.doc ? ' active' : '');
+    const n = document.createElement('span'); n.textContent = d.name + (d.history.dirty ? ' •' : '');
+    const x = document.createElement('span'); x.className = 'x'; x.textContent = '✕';
+    x.onclick = (e) => { e.stopPropagation(); close(i); };
+    t.onclick = () => switchTo(i);
+    t.onauxclick = () => close(i);
+    t.append(n, x); tabs.append(t);
+  });
+}
+
+export function initStatus() {
+  $('status').innerHTML = `<span id="sdoc"></span><span id="scur"></span><span class="sp"></span><button id="sfit">Fit</button><button id="s100">100%</button><span id="szoom"></span>`;
+  $('sfit').onclick = () => app.view.fit();
+  $('s100').onclick = () => app.view.setZoom(1);
+}
+export function renderStatus() {
+  const d = app.doc, v = app.view;
+  if (!d) return;
+  $('sdoc').textContent = `${d.width} × ${d.height} px`;
+  $('szoom').textContent = Math.round(v.zoom * 100) + '%';
+  const c = v.cursorDoc;
+  $('scur').textContent = c ? `${Math.floor(c.x)}, ${Math.floor(c.y)}` : '';
+}
+
+export function renderHistory() {
+  const h = app.doc.history, list = $('hlist');
+  list.innerHTML = '';
+  const item = (t: string, cur = false) => { const d = document.createElement('div'); d.className = 'item' + (cur ? ' cur' : ''); d.textContent = t; list.append(d); };
+  item(h.canUndo ? `Last: ${h.undoLabel}` : 'No history', true);
+  if (h.canRedo) item(`Redo: ${h.redoLabel}`);
+}

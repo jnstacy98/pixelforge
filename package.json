@@ -1,0 +1,74 @@
+{
+  "name": "pixelforge",
+  "productName": "PixelForge",
+  "version": "0.1.0",
+  "description": "A Photoshop-inspired desktop image editor with layers, brushes and PSD support",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "start": "npm run build && electron .",
+    "app:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron . --dev\"",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "test": "node tests/e2e.mjs"
+  },
+  "build": {
+    "appId": "dev.pixelforge.app",
+    "productName": "PixelForge",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    },
+    "fileAssociations": [
+      {
+        "ext": "psd",
+        "name": "Photoshop Document"
+      },
+      {
+        "ext": "png",
+        "name": "PNG Image"
+      },
+      {
+        "ext": "jpg",
+        "name": "JPEG Image"
+      },
+      {
+        "ext": "webp",
+        "name": "WebP Image"
+      }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "concurrently": "^10.0.6",
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "wait-on": "^9.5.1"
+  },
+  "dependencies": {
+    "ag-psd": "^34.1.0"
+  }
+}
