@@ -1171,6 +1171,90 @@ assert.ok(cafQuality.stray < 300, `stray foreign-colour pixels: ${cafQuality.str
 assert.ok(cafQuality.struct < 22, `structural error ${cafQuality.struct}`); ok(`…and the structure matches the true background (low-pass error ${cafQuality.struct.toFixed(1)}/255, ${(cafQuality.ms / 1000).toFixed(1)} s for a 280×187 region at High quality)`);
 await page.screenshot({ path: 'tests/caf-after2.png' });
 
+
+// 6l. patch tool
+const patchScene = async (mode = 'source', blend = true) => {
+  await page.evaluate(([mode, blend]) => {
+    window.__blank(400, 300); const a = window.__app, d = a.doc, x = d.layers[0].ctx;
+    const img = x.createImageData(400, 300), px = img.data;
+    for (let y = 0; y < 300; y++) for (let xx = 0; xx < 400; xx++) {
+      const h = (((xx * 73856093) ^ (y * 19349663)) >>> 0) % 256, n = (h / 255 - 0.5) * 28, i = (y * 400 + xx) * 4, base = xx < 200 ? [120, 110, 100] : [170, 160, 150];
+      px[i] = base[0] + n; px[i + 1] = base[1] + n; px[i + 2] = base[2] + n; px[i + 3] = 255;
+    }
+    x.putImageData(img, 0, 0);
+    x.fillStyle = '#281e1e'; x.beginPath(); x.arc(100, 150, 12, 0, 7); x.fill();          // the blemish
+    d.emit('structure'); d.setSelection(null);
+    a.patch.mode = mode; a.patch.blend = blend; a.clone.sample = 'layer'; a.setTool('patch');
+  }, [mode, blend]);
+  await wait();
+};
+const lassoAround = async (cx, cy, r, key) => {
+  const pts = Array.from({ length: 14 }, (_, i) => [cx + Math.cos((i / 14) * Math.PI * 2) * r, cy + Math.sin((i / 14) * Math.PI * 2) * r]);
+  const sp = await Promise.all(pts.map((q) => toScreen(...q)));
+  if (key) await page.keyboard.down(key);
+  await page.mouse.move(sp[0].x, sp[0].y); await page.mouse.down();
+  for (const q of sp.slice(1)) await page.mouse.move(q.x, q.y, { steps: 2 });
+  await page.mouse.up(); if (key) await page.keyboard.up(key); await wait();
+};
+const discStats = (cx, cy, r) => page.evaluate(([cx, cy, r]) => { const d = window.__app.doc.layers[0].ctx.getImageData(cx - r, cy - r, 2 * r + 1, 2 * r + 1).data; let s = 0, s2 = 0, k = 0, mn = 255; for (let y = 0; y <= 2 * r; y++) for (let x = 0; x <= 2 * r; x++) { if (Math.hypot(x - r, y - r) > r) continue; const v = d[(y * (2 * r + 1) + x) * 4]; s += v; s2 += v * v; k++; if (v < mn) mn = v; } const m = s / k; return { mean: m, sd: Math.sqrt(Math.max(0, s2 / k - m * m)), min: mn }; }, [cx, cy, r]);
+
+await patchScene();
+assert.ok((await discStats(100, 150, 8)).mean < 60); ok('scene: a dark blemish on a textured, darker left half; the right half is brighter');
+await lassoAround(100, 150, 26);
+const sel0 = await page.evaluate(() => ({ ...window.__app.doc.selection, irregular: !!window.__app.doc.selMask }));
+assert.ok(sel0.w > 40 && sel0.w < 60 && sel0.irregular); ok('the Patch tool draws a freehand selection around the blemish');
+
+// drag the outline onto a clean (but brighter) area: preview first, blended result on release
+const pFrom = await toScreen(100, 150), pTo = await toScreen(300, 150);
+await page.mouse.move(pFrom.x, pFrom.y); await page.mouse.down(); await page.mouse.move((pFrom.x + pTo.x) / 2, pFrom.y, { steps: 6 }); await page.mouse.move(pTo.x, pTo.y, { steps: 6 });
+const live = await cpx(100, 150); assert.ok(live[0] > 140, `preview ${live}`); ok('while dragging, the selection shows a live preview of the source');
+await page.mouse.up(); await wait(); await wait();
+const patched = await discStats(100, 150, 14);
+assert.ok(patched.min > 80, `blemish still there (min ${patched.min})`); ok('on release the blemish is gone');
+assert.ok(Math.abs(patched.mean - 120) < 16, `mean ${patched.mean}`); ok(`the patch takes on the surrounding tone, not the brighter source (mean ${patched.mean.toFixed(0)} vs source ~170)`);
+assert.ok(patched.sd > 3, `sd ${patched.sd}`); ok('…while keeping the source texture (it is not a flat smear)');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Patch'); assert.ok(near([await page.evaluate(() => Math.round(window.__app.doc.selection.x))], [sel0.x], 2)); ok('one "Patch" undo step; the selection stays on the repaired area');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok((await discStats(100, 150, 8)).mean < 60); ok('undo brings the blemish back');
+await page.keyboard.press('Control+Shift+z'); await wait();
+
+// without "Match tone & texture" it is a plain copy (brighter)
+await patchScene('source', false); await lassoAround(100, 150, 26);
+await drag([100, 150], [300, 150]); await wait();
+assert.ok((await discStats(100, 150, 14)).mean > 150); ok('with "Match tone" off the patch is a plain copy of the source (stays bright)');
+
+// destination mode: copy a marked area elsewhere; the selection moves with it, all one undo step
+await patchScene('dest', true);
+await page.evaluate(() => { const c = window.__app.doc.layers[0].ctx; c.fillStyle = '#d02020'; c.fillRect(50, 50, 24, 24); });
+await lassoAround(62, 62, 22);
+const origSelX = await page.evaluate(() => window.__app.doc.selection.x);
+await drag([62, 62], [112, 162]); await wait(); await wait();
+const copyPx = await page.evaluate(() => Array.from(window.__app.doc.layers[0].ctx.getImageData(112, 162, 1, 1).data)), origPx = await page.evaluate(() => Array.from(window.__app.doc.layers[0].ctx.getImageData(62, 62, 1, 1).data));
+assert.ok(copyPx[0] > 150 && copyPx[1] < 100, `copy ${copyPx}`); assert.ok(origPx[0] > 150 && origPx[1] < 100); ok('Destination mode: the marked area is copied to the drop point and the original stays');
+assert.equal(await page.evaluate(() => Math.round(window.__app.doc.selection.x - 0)), Math.round(origSelX + 50)); ok('…and the selection moved to the new location');
+await page.keyboard.press('Control+z'); await wait();
+const afterUndo = await page.evaluate(() => ({ px: Array.from(window.__app.doc.layers[0].ctx.getImageData(112, 162, 1, 1).data), selX: window.__app.doc.selection && window.__app.doc.selection.x }));
+assert.ok(afterUndo.px[0] < 190 && afterUndo.px[1] > 90); assert.equal(Math.round(afterUndo.selX), Math.round(origSelX)); ok('a single undo removes the copy and returns the selection');
+
+// clicking inside without dragging does nothing; dragging outside draws a new selection (Shift adds)
+await patchScene(); await lassoAround(100, 150, 26);
+const h0 = await page.evaluate(() => window.__app.doc.history.depth);
+const c0 = await toScreen(100, 150); await page.mouse.click(c0.x, c0.y); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.history.depth), h0); ok('a click inside the selection (no drag) changes nothing');
+await lassoAround(300, 80, 20); assert.ok(await page.evaluate(() => window.__app.doc.selection.x > 250)); ok('drawing outside the current selection starts a new one');
+await lassoAround(100, 150, 20, 'Shift'); assert.ok(await page.evaluate(() => window.__app.doc.selection.x < 120 && window.__app.doc.selection.x + window.__app.doc.selection.w > 300)); ok('Shift adds to the selection');
+
+// a group can't be patched; other tools survived the refactor (eyedropper)
+await gx(`d.setSelection(null); d.newGroup(); return 1`); await lassoAround(100, 150, 26);
+await drag([100, 150], [300, 150]); await wait();
+assert.match(await page.evaluate(() => document.getElementById('toast').textContent), /group/i); ok('patching with a group selected is refused with a hint');
+await page.keyboard.press('Control+z'); await wait();
+await patchScene(); await page.evaluate(() => { window.__app.setTool('eyedropper'); window.__app.setFg('#000000'); });
+const ep = await toScreen(300, 200); await page.mouse.click(ep.x, ep.y); await wait();
+const picked = await page.evaluate(() => window.__app.fg), expect = await page.evaluate(() => { const d = window.__app.doc.layers[0].ctx.getImageData(300, 200, 1, 1).data; return '#' + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join(''); });
+assert.equal(picked, expect); ok('the eyedropper still picks colours');
+await page.evaluate(() => window.__app.setTool('move'));
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

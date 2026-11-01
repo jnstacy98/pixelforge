@@ -95,7 +95,7 @@ const blendFor = (l: Layer): GlobalCompositeOperation => (l.isGroup && l.blend =
 /** The live-stroke state for a layer and its mask coverage as an alpha canvas (null = no / fully-revealing mask). */
 function maskAlphaFor(doc: Doc, layer: Layer, w: number, h: number) {
   let live = doc.stroke && doc.stroke.layer === layer ? doc.stroke : null;
-  if (live && doc.selMask) live = { ...live, canvas: clipToSelection(doc, live.canvas, scratch(4, w, h)) };
+  if (live && doc.selMask && !live.unclipped) live = { ...live, canvas: clipToSelection(doc, live.canvas, scratch(4, w, h)) };
   let alpha: HTMLCanvasElement | null = null;
   if (layer.mask && layer.maskEnabled) {
     alpha = live?.onMask ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h)) : layer.maskAlpha();

@@ -13,6 +13,14 @@ export class History {
     this.dirty = true;
     this.onChange();
   }
+  /** Fold the last two entries into a single undo step (e.g. a pixel edit plus the selection change that goes with it). */
+  merge(label?: string) {
+    if (this.idx < 2) return;
+    const b = this.stack[this.idx - 1], a = this.stack[this.idx - 2];
+    this.stack.splice(this.idx - 2, 2, { label: label ?? a.label, undo: () => { b.undo(); a.undo(); }, redo: () => { a.redo(); b.redo(); } });
+    this.idx--;
+    this.onChange();
+  }
   /** Number of undoable steps currently applied (used by tests). */
   get depth() { return this.idx; }
   get canUndo() { return this.idx > 0; }

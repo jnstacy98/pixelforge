@@ -149,7 +149,7 @@ export function buildTree(layers: Layer[]): LayerNode[] {
 }
 
 /** An in-progress brush stroke, composited at render time so stroke opacity behaves like Photoshop. */
-export interface Stroke { layer: Layer; canvas: HTMLCanvasElement; opacity: number; erase: boolean; onMask: boolean }
+export interface Stroke { layer: Layer; canvas: HTMLCanvasElement; opacity: number; erase: boolean; onMask: boolean; /** Preview is already placed where it should be: don't clip it to the selection. */ unclipped?: boolean }
 
 interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; adjustment: AdjustmentData | null; effects: LayerEffects | null; fillOpacity: number }
 const captureLayer = (l: Layer): LayerState => ({

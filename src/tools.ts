@@ -4,8 +4,10 @@ import { MarqueeTool, LassoTool, WandTool } from './selecttools';
 import { clipToSelection, selectedFlags } from './selection';
 import { floodSelect } from './flood';
 import { chooseSpotOffset, healPatch } from './heal';
+import { sampleSnapshot } from './sampling';
+import { PatchTool } from './patchtool';
 import { Layer, cloneCanvas, clampRect, ctxOf, makeCanvas, pushPixelEdit, type Rect } from './doc';
-import { composite, flatten } from './render';
+import { flatten } from './render';
 
 export interface Pt { x: number; y: number; pressure: number }
 export interface Tool {
@@ -106,16 +108,7 @@ class PaintTool implements Tool {
   }
 
   /** Freeze the pixels we sample from (current layer, current & below, or everything) at stroke start. */
-  private takeSnap() {
-    const doc = app.doc, layer = doc.active, mode = layer.maskMode ? 'layer' : app.clone.sample;
-    if (mode === 'layer') this.snap = cloneCanvas(layer.target);
-    else {
-      const upTo = mode === 'below' ? doc.layers.indexOf(layer) + 1 : doc.layers.length;
-      const shim = { width: doc.width, height: doc.height, layers: doc.layers.slice(0, upTo), stroke: null, selMask: null } as unknown as typeof doc;
-      this.snap = makeCanvas(doc.width, doc.height);
-      composite(shim, ctxOf(this.snap));
-    }
-  }
+  private takeSnap() { this.snap = sampleSnapshot(); }
 
   /** A brush-tip-shaped patch of source pixels, positioned on whole pixels so cloning stays sharp. */
   private cloneStamp(p: Pt, size: number) {
@@ -423,5 +416,5 @@ class HandTool implements Tool { cursor = 'grab'; down() {} move() {} up() {} }
 
 export const tools: Record<ToolId, Tool> = {
   move: new MoveTool(), marquee: new MarqueeTool(), brush: new PaintTool('brush'), eraser: new PaintTool('eraser'),
-  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), clone: new PaintTool('clone'), heal: new PaintTool('heal'), spot: new PaintTool('spot'),
+  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), clone: new PaintTool('clone'), heal: new PaintTool('heal'), spot: new PaintTool('spot'), patch: new PatchTool(),
 };
