@@ -6,6 +6,7 @@ import { initToolbar, initPanels, initStatus, renderOptions, renderLayers, rende
 import { importFile, pickFiles, saveAs, OPEN_EXTS, type ExportFormat, type OpenedFile } from './io';
 import { applyFilter, clearSelection, fillSelection } from './filters';
 import { formDialog } from './dialog';
+import { editor } from './texttool';
 
 // ------------------------------------------------------------------ documents
 function refresh() {
@@ -123,6 +124,13 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Duplicate Layer', shortcut: 'Ctrl+J', action: () => app.doc.duplicateLayer() },
     { label: 'Delete Layer', action: () => app.doc.removeLayer() },
     '-',
+    { label: 'Add Layer Mask — Reveal All', action: () => app.doc.addMask('reveal') },
+    { label: 'Add Layer Mask — Hide All', action: () => app.doc.addMask('hide') },
+    { label: 'Add Layer Mask — From Selection', action: () => app.doc.addMask('selection') },
+    { label: app.doc.active.maskEnabled ? 'Disable Layer Mask' : 'Enable Layer Mask', action: () => app.doc.toggleMask() },
+    { label: 'Apply Layer Mask', action: () => app.doc.applyMask() },
+    { label: 'Delete Layer Mask', action: () => app.doc.deleteMask() },
+    '-',
     { label: 'Merge Down', shortcut: 'Ctrl+E', action: () => app.doc.mergeDown() },
     { label: 'Flatten Image', action: () => app.doc.flatten() },
   ] },
@@ -227,6 +235,7 @@ window.addEventListener('drop', async (e) => {
 window.addEventListener('beforeunload', (e) => { if (app.docs.some((d) => d.history.dirty)) e.preventDefault(); });
 app.view = new Viewer(document.getElementById('stage')!);
 app.view.onStatus = renderStatus;
+app.view.onTransform = () => editor.reposition();
 initToolbar(); initPanels(); initStatus(); initMenus();
 app.on('tool', renderOptions); renderOptions();
 app.on('history', refresh);
@@ -240,7 +249,12 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const data = await encode(app.doc, 'psd');
   const d2 = await importFile({ name: 'rt.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
   const top = d2.layers[d2.layers.length - 1];
-  return { summary: { bytes: data.length, layers: d2.layers.length, w: d2.width, top: { name: top.name, opacity: top.opacity, blend: top.blend } } };
+  const bg = d2.layers[0];
+  const mp = (x: number, y: number) => (bg.mask ? Array.from(bg.mask.getContext('2d')!.getImageData(x, y, 1, 1).data)[0] : -1);
+  return {
+    summary: { bytes: data.length, layers: d2.layers.length, w: d2.width, top: { name: top.name, opacity: top.opacity, blend: top.blend } },
+    mask: { has: !!bg.mask, hiddenAtStroke: mp(400, 200), visibleElsewhere: mp(100, 700) },
+  };
 };
 (window as any).__openPng = async () => {
   const c = document.createElement('canvas'); c.width = 64; c.height = 48;

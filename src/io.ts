@@ -71,6 +71,14 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
       const l = new Layer(c.name || 'Layer', canvas);
       l.visible = !(hidden || c.hidden);
       l.opacity = (c.opacity ?? 1) * opacity;
+      if (c.mask?.canvas) {
+        // PSD masks are grayscale rects; expand to a document-sized mask filled with the mask's default color.
+        const m = makeCanvas(psd.width, psd.height), mx = ctxOf(m), dc = c.mask.defaultColor ?? 0;
+        mx.fillStyle = `rgb(${dc},${dc},${dc})`; mx.fillRect(0, 0, m.width, m.height);
+        const rel = c.mask.positionRelativeToLayer ? (c.left ?? 0) : 0, relY = c.mask.positionRelativeToLayer ? (c.top ?? 0) : 0;
+        mx.drawImage(c.mask.canvas, (c.mask.left ?? 0) + rel, (c.mask.top ?? 0) + relY);
+        l.mask = m; l.maskEnabled = !c.mask.disabled;
+      }
       l.blend = (c.blendMode as string) && (c.blendMode as string) !== 'pass through' ? (c.blendMode as string) : 'normal';
       doc.layers.push(l);
     }
@@ -94,6 +102,7 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
       children: doc.layers.map((l) => ({
         name: l.name, canvas: l.canvas, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible,
         blendMode: l.blend as PsdLayer['blendMode'],
+        mask: l.mask ? { canvas: l.mask, left: 0, top: 0, right: doc.width, bottom: doc.height, defaultColor: 0, disabled: !l.maskEnabled } : undefined,
       })),
     };
     return new Uint8Array(writePsd(psd, { generateThumbnail: true }));

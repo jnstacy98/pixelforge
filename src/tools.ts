@@ -1,4 +1,5 @@
-import { app, hexToRgb, rgbToHex, type ToolId } from './state';
+import { app, hexToRgb, rgbToHex, paintColor, grayOf, type ToolId } from './state';
+import { TextTool } from './texttool';
 import { Layer, cloneCanvas, clampRect, ctxOf, makeCanvas, pushPixelEdit, type Rect } from './doc';
 import { flatten } from './render';
 
@@ -51,19 +52,23 @@ class PaintTool implements Tool {
   private dirty: Rect | null = null;
   private layer!: Layer;
   private active = false;
+  private onMask = false;
   constructor(private erase: boolean) {}
+  /** On a mask the eraser paints the background color instead of removing alpha. */
+  private get erasing() { return this.erase && !this.onMask; }
 
   down(p: Pt) {
     const doc = app.doc;
     this.layer = doc.active;
-    this.before = cloneCanvas(this.layer.canvas);
+    this.onMask = this.layer.maskMode;
+    this.before = cloneCanvas(this.layer.target);
     if (!strokeCanvas || strokeCanvas.width !== doc.width || strokeCanvas.height !== doc.height) strokeCanvas = makeCanvas(doc.width, doc.height);
     const sctx = ctxOf(strokeCanvas);
     sctx.setTransform(1, 0, 0, 1, 0, 0);
     sctx.clearRect(0, 0, doc.width, doc.height);
     sctx.save();
     if (doc.selection) { const s = doc.selection; sctx.beginPath(); sctx.rect(s.x, s.y, s.w, s.h); sctx.clip(); }
-    doc.stroke = { layer: this.layer, canvas: strokeCanvas, opacity: app.brush.opacity, erase: this.erase };
+    doc.stroke = { layer: this.layer, canvas: strokeCanvas, opacity: app.brush.opacity, erase: this.erasing, onMask: this.onMask };
     this.dirty = null; this.carry = 0; this.active = true;
     this.dab(p);
     this.last = p;
@@ -73,7 +78,8 @@ class PaintTool implements Tool {
   private dab(p: Pt, pressureOn = true) {
     const b = app.brush;
     const size = b.size * (pressureOn && p.pressure > 0 && p.pressure < 1 ? Math.max(0.15, p.pressure) : 1);
-    const stamp = getStamp(Math.max(1, Math.round(size)), b.hardness, this.erase ? '#000000' : app.fg);
+    const color = this.onMask ? grayOf(this.erase ? app.bg : app.fg) : this.erase ? '#000000' : app.fg;
+    const stamp = getStamp(Math.max(1, Math.round(size)), b.hardness, color);
     const ctx = ctxOf(strokeCanvas!);
     ctx.globalAlpha = b.flow;
     ctx.drawImage(stamp, p.x - stamp.width / 2, p.y - stamp.height / 2);
@@ -109,10 +115,10 @@ class PaintTool implements Tool {
     this.active = false;
     const doc = app.doc, s = doc.stroke!;
     ctxOf(strokeCanvas!).restore();
-    const ctx = this.layer.ctx;
+    const ctx = this.layer.tctx;
     ctx.save();
     ctx.globalAlpha = s.opacity;
-    ctx.globalCompositeOperation = this.erase ? 'destination-out' : 'source-over';
+    ctx.globalCompositeOperation = this.erasing ? 'destination-out' : 'source-over';
     ctx.drawImage(s.canvas, 0, 0);
     ctx.restore();
     doc.stroke = null;
@@ -125,13 +131,13 @@ class BucketTool implements Tool {
   cursor = 'crosshair';
   down(p: Pt) {
     const doc = app.doc, layer = doc.active;
-    const w = layer.canvas.width, h = layer.canvas.height;
+    const w = layer.target.width, h = layer.target.height;
     const sx = Math.floor(p.x), sy = Math.floor(p.y);
     if (sx < 0 || sy < 0 || sx >= w || sy >= h) return;
     const bounds = doc.selection ? clampRect(doc.selection, w, h)! : { x: 0, y: 0, w, h };
     if (!bounds || sx < bounds.x || sy < bounds.y || sx >= bounds.x + bounds.w || sy >= bounds.y + bounds.h) return;
-    const before = cloneCanvas(layer.canvas);
-    const img = layer.ctx.getImageData(0, 0, w, h), d = img.data;
+    const before = cloneCanvas(layer.target);
+    const img = layer.tctx.getImageData(0, 0, w, h), d = img.data;
     const o = (sy * w + sx) * 4;
     const t = [d[o], d[o + 1], d[o + 2], d[o + 3]];
     const tol = app.fill.tolerance;
@@ -156,7 +162,7 @@ class BucketTool implements Tool {
     } else {
       for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (match((y * w + x) * 4)) mask[y * w + x] = 1;
     }
-    const [R, G, B] = hexToRgb(app.fg);
+    const [R, G, B] = hexToRgb(paintColor(app.fg));
     const out = new ImageData(w, h), od = out.data;
     let minX = w, minY = h, maxX = -1, maxY = -1;
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
@@ -168,7 +174,7 @@ class BucketTool implements Tool {
     if (maxX < 0) return;
     const tmp = makeCanvas(w, h);
     ctxOf(tmp).putImageData(out, 0, 0);
-    const ctx = layer.ctx;
+    const ctx = layer.tctx;
     ctx.save(); ctx.globalAlpha = app.brush.opacity; ctx.drawImage(tmp, 0, 0); ctx.restore();
     pushPixelEdit(doc, layer, before, { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }, 'Paint Bucket');
   }
@@ -186,16 +192,17 @@ class GradientTool implements Tool {
     if (!a) return;
     const doc = app.doc, layer = doc.active;
     if (Math.hypot(p.x - a.x, p.y - a.y) < 2) { doc.emit('selection'); return; }
-    const before = cloneCanvas(layer.canvas);
+    const before = cloneCanvas(layer.target);
     const tmp = makeCanvas(doc.width, doc.height), ctx = ctxOf(tmp);
     const g = ctx.createLinearGradient(a.x, a.y, p.x, p.y);
-    const [r, gg, b] = hexToRgb(app.fg);
-    g.addColorStop(0, app.fg);
-    g.addColorStop(1, app.gradient.mode === 'fg-bg' ? app.bg : `rgba(${r},${gg},${b},0)`);
+    const fg = paintColor(app.fg);
+    const [r, gg, b] = hexToRgb(fg);
+    g.addColorStop(0, fg);
+    g.addColorStop(1, app.gradient.mode === 'fg-bg' ? paintColor(app.bg) : `rgba(${r},${gg},${b},0)`);
     ctx.fillStyle = g;
     const s = doc.selection ?? { x: 0, y: 0, w: doc.width, h: doc.height };
     ctx.fillRect(s.x, s.y, s.w, s.h);
-    const lctx = layer.ctx;
+    const lctx = layer.tctx;
     lctx.save(); lctx.globalAlpha = app.brush.opacity; lctx.drawImage(tmp, 0, 0); lctx.restore();
     pushPixelEdit(doc, layer, before, s, 'Gradient');
     this.b = null;
@@ -209,45 +216,59 @@ class GradientTool implements Tool {
 }
 
 // ---------------------------------------------------------------- move
+/** Moves the whole layer (pixels, linked mask and text position) or, with a selection, the selected pixels of the edit target. */
 class MoveTool implements Tool {
   cursor = 'move';
   private start: Pt | null = null;
-  private snap!: HTMLCanvasElement;
   private layer!: Layer;
+  private items: { get: () => HTMLCanvasElement; snap: HTMLCanvasElement }[] = [];
   private selBefore: Rect | null = null;
   private selNow: Rect | null = null;
+  private textBefore: { x: number; y: number } | null = null;
   down(p: Pt) {
-    this.start = p; this.layer = app.doc.active;
-    this.snap = cloneCanvas(this.layer.canvas);
-    this.selBefore = app.doc.selection; this.selNow = this.selBefore;
+    const doc = app.doc;
+    this.start = p; this.layer = doc.active;
+    const l = this.layer;
+    this.selBefore = doc.selection; this.selNow = this.selBefore;
+    const canvasItem = { get: () => l.canvas, snap: cloneCanvas(l.canvas) };
+    const maskItem = l.mask ? { get: () => l.mask!, snap: cloneCanvas(l.mask) } : null;
+    this.items = doc.selection ? [l.maskMode ? maskItem! : canvasItem] : maskItem ? [canvasItem, maskItem] : [canvasItem];
+    this.textBefore = !doc.selection && l.text ? { x: l.text.x, y: l.text.y } : null;
   }
   move(p: Pt) {
     if (!this.start) return;
-    const dx = Math.round(p.x - this.start.x), dy = Math.round(p.y - this.start.y);
-    const ctx = this.layer.ctx, doc = app.doc;
-    ctx.save();
-    ctx.clearRect(0, 0, doc.width, doc.height);
+    const dx = Math.round(p.x - this.start.x), dy = Math.round(p.y - this.start.y), doc = app.doc;
     const s = this.selBefore ? clampRect(this.selBefore, doc.width, doc.height) : null;
-    if (s) {
-      ctx.drawImage(this.snap, 0, 0);
-      ctx.clearRect(s.x, s.y, s.w, s.h);
-      ctx.drawImage(this.snap, s.x, s.y, s.w, s.h, s.x + dx, s.y + dy, s.w, s.h);
-      this.selNow = { ...this.selBefore!, x: this.selBefore!.x + dx, y: this.selBefore!.y + dy };
-      doc.selection = this.selNow;
-    } else ctx.drawImage(this.snap, dx, dy);
-    ctx.restore();
+    for (const it of this.items) {
+      const c = it.get(), ctx = ctxOf(c);
+      ctx.save();
+      ctx.clearRect(0, 0, c.width, c.height);
+      if (s) {
+        ctx.drawImage(it.snap, 0, 0);
+        ctx.clearRect(s.x, s.y, s.w, s.h);
+        ctx.drawImage(it.snap, s.x, s.y, s.w, s.h, s.x + dx, s.y + dy, s.w, s.h);
+      } else ctx.drawImage(it.snap, dx, dy);
+      ctx.restore();
+    }
+    if (s) { this.selNow = { ...this.selBefore!, x: this.selBefore!.x + dx, y: this.selBefore!.y + dy }; doc.selection = this.selNow; }
+    if (this.textBefore && this.layer.text) { this.layer.text.x = this.textBefore.x + dx; this.layer.text.y = this.textBefore.y + dy; }
+    this.layer.touchMask();
     doc.emit('pixels');
   }
   up() {
     if (!this.start) return;
     this.start = null;
-    const doc = app.doc, layer = this.layer, before = this.snap, selB = this.selBefore, selN = this.selNow;
-    const a = cloneCanvas(layer.canvas);
-    doc.history.push({
-      label: 'Move',
-      undo: () => { layer.ctx.clearRect(0, 0, doc.width, doc.height); layer.ctx.drawImage(before, 0, 0); doc.selection = selB; doc.emit('structure'); },
-      redo: () => { layer.ctx.clearRect(0, 0, doc.width, doc.height); layer.ctx.drawImage(a, 0, 0); doc.selection = selN; doc.emit('structure'); },
-    });
+    const doc = app.doc, layer = this.layer, items = this.items, selB = this.selBefore, selN = this.selNow;
+    const after = items.map((it) => cloneCanvas(it.get()));
+    const tb = this.textBefore, ta = layer.text && tb ? { x: layer.text.x, y: layer.text.y } : null;
+    const put = (src: HTMLCanvasElement[], sel: Rect | null, t: { x: number; y: number } | null) => {
+      items.forEach((it, i) => { const x = ctxOf(it.get()); x.clearRect(0, 0, it.get().width, it.get().height); x.drawImage(src[i], 0, 0); });
+      doc.selection = sel;
+      if (t && layer.text) { layer.text.x = t.x; layer.text.y = t.y; }
+      layer.touchMask(); doc.emit('structure');
+    };
+    const before = items.map((it) => it.snap);
+    doc.history.push({ label: 'Move', undo: () => put(before, selB, tb), redo: () => put(after, selN, ta) });
     doc.emit('structure');
   }
 }
@@ -295,5 +316,5 @@ class HandTool implements Tool { cursor = 'grab'; down() {} move() {} up() {} }
 
 export const tools: Record<ToolId, Tool> = {
   move: new MoveTool(), marquee: new MarqueeTool(), brush: new PaintTool(false), eraser: new PaintTool(true),
-  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(),
+  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(),
 };

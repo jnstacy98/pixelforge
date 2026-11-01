@@ -17,6 +17,7 @@ export class Viewer {
   private drawing = false;
   private unsub: (() => void) | null = null;
   onStatus: () => void = () => {};
+  onTransform: () => void = () => {};
 
   constructor(private stage: HTMLElement) {
     this.wrap.className = 'docwrap';
@@ -93,7 +94,7 @@ export class Viewer {
     this.wrap.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
     this.canvas.style.imageRendering = this.zoom >= 3 ? 'pixelated' : 'auto';
     this.wrap.style.setProperty('--check', `${Math.max(4, 8 / Math.max(this.zoom, 0.5))}px`);
-    this.drawOverlay(); this.onStatus();
+    this.drawOverlay(); this.onStatus(); this.onTransform();
   }
 
   toDoc(e: { clientX: number; clientY: number }): { x: number; y: number } {
@@ -109,7 +110,7 @@ export class Viewer {
   private handMode(e: PointerEvent) { return e.button === 1 || this.spaceDown || app.toolId === 'hand'; }
 
   private onDown(e: PointerEvent) {
-    if (!this.doc) return;
+    if (!this.doc || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
     this.stage.setPointerCapture(e.pointerId);
     if (this.handMode(e)) {
       this.panning = { x: e.clientX, y: e.clientY, px: this.panX, py: this.panY };
@@ -120,6 +121,7 @@ export class Viewer {
     tools[app.toolId].down(this.pt(e), e);
   }
   private onMove(e: PointerEvent) {
+    if ((e.target as HTMLElement).tagName === 'TEXTAREA' && !this.drawing && !this.panning) return;
     const r = this.stage.getBoundingClientRect();
     this.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
     if (this.panning) {
@@ -132,9 +134,10 @@ export class Viewer {
       for (const ce of evs.length ? evs : [e]) tools[app.toolId].move(this.pt(ce), ce);
     }
     this.onStatus();
-    if (app.toolId === 'brush' || app.toolId === 'eraser') this.drawOverlay();
+    if (tools[app.toolId].brushCursor) this.drawOverlay();
   }
   private onUp(e: PointerEvent) {
+    if ((e.target as HTMLElement).tagName === 'TEXTAREA' && !this.drawing && !this.panning) return;
     if (this.panning) { this.panning = null; this.updateCursor(); return; }
     if (this.drawing) { this.drawing = false; tools[app.toolId].up(this.pt(e), e); }
   }

@@ -1,5 +1,6 @@
 import { app, type ToolId } from './state';
-import { BLEND_MODES, type Layer } from './doc';
+import { BLEND_MODES } from './doc';
+import { FONTS } from './text';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const svg = (p: string) => `<svg viewBox="0 0 24 24">${p}</svg>`;
@@ -11,6 +12,7 @@ const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
   { id: 'eraser', key: 'E', label: 'Eraser', icon: svg('<path d="M20 20H8l-4.6-4.6a1.4 1.4 0 010-2L13 3.8a1.4 1.4 0 012 0l5.6 5.6a1.4 1.4 0 010 2L11 21"/><path d="M7 11l6 6"/>') },
   { id: 'bucket', key: 'G', label: 'Paint Bucket', icon: svg('<path d="M19 11l-8-8-8.6 8.6a2 2 0 000 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11z"/><path d="M5 2l5 5M2 13h15"/><path d="M22 20a2 2 0 11-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4z"/>') },
   { id: 'gradient', key: 'D', label: 'Gradient', icon: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 17L17 7" stroke-dasharray="1 3"/>') },
+  { id: 'text', key: 'T', label: 'Text', icon: svg('<path d="M4 7V4h16v3M9 20h6M12 4v16"/>') },
   { id: 'eyedropper', key: 'I', label: 'Eyedropper', icon: svg('<path d="M2 22l1-1h3l9-9M3 21v-3l9-9"/><path d="M15 6l3.4-3.4a2.1 2.1 0 013 3L18 9l.4.4a2.1 2.1 0 11-3 3l-3.8-3.8a2.1 2.1 0 113-3L15 6z"/>') },
   { id: 'hand', key: 'H', label: 'Hand (or hold Space)', icon: svg('<path d="M18 11V6a2 2 0 00-4 0M14 10V4a2 2 0 00-4 0v2M10 10.5V6a2 2 0 00-4 0v8"/><path d="M18 8a2 2 0 114 0v6a8 8 0 01-8 8h-2c-2.8 0-4.5-.9-5.9-2.4L3.4 16a2 2 0 013-2.8L8 15"/>') },
 ];
@@ -66,6 +68,25 @@ export function renderOptions() {
     s.innerHTML = '<option value="fg-bg">Foreground → Background</option><option value="fg-transparent">Foreground → Transparent</option>';
     s.value = app.gradient.mode; s.onchange = () => (app.gradient.mode = s.value as any); l.append('Mode', s); el.append(l);
     el.append(slider('Opacity', () => b.opacity, (v) => (b.opacity = v), 0.01, 1, 0.01, pct));
+  } else if (t === 'text') {
+    const tx = app.text, fire = () => app.emit('textstyle');
+    const fontSel = document.createElement('select');
+    fontSel.innerHTML = FONTS.map(([n, css]) => `<option value="${css.replace(/"/g, '&quot;')}">${n}</option>`).join('');
+    fontSel.value = tx.font; fontSel.onchange = () => { tx.font = fontSel.value; fire(); };
+    const size = document.createElement('input'); size.type = 'number'; size.min = '4'; size.max = '1000'; size.value = String(tx.size); size.style.width = '64px';
+    size.onchange = () => { tx.size = Math.max(4, Math.min(1000, Number(size.value) || 48)); fire(); };
+    const toggle = (label: string, style: string, get: () => boolean, set: (v: boolean) => void) => {
+      const b = document.createElement('button'); b.innerHTML = label; b.style.cssText = style; b.classList.toggle('primary', get());
+      b.onclick = () => { set(!get()); b.classList.toggle('primary', get()); fire(); }; return b;
+    };
+    const align = document.createElement('select');
+    align.innerHTML = '<option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>';
+    align.value = tx.align; align.onchange = () => { tx.align = align.value as typeof tx.align; fire(); };
+    const lab = (n: string, el: HTMLElement) => { const l = document.createElement('label'); l.append(n, el); return l; };
+    const hint = document.createElement('span'); hint.style.color = 'var(--dim)';
+    hint.textContent = 'Click canvas to type · click text to edit · Esc / Ctrl+Enter to finish · color = foreground';
+    el.append(lab('Font', fontSel), lab('Size', size), toggle('<b>B</b>', '', () => tx.bold, (v) => (tx.bold = v)),
+      toggle('<i>I</i>', '', () => tx.italic, (v) => (tx.italic = v)), lab('Align', align), hint);
   } else {
     const hint = document.createElement('span');
     hint.style.color = 'var(--dim)';
@@ -85,7 +106,7 @@ export function initPanels() {
     <div class="lbtns">
       <button id="lnew" title="New layer (Ctrl+Shift+N)">＋</button><button id="ldup" title="Duplicate (Ctrl+J)">⧉</button>
       <button id="lup" title="Move up">▲</button><button id="ldown" title="Move down">▼</button>
-      <button id="lmerge" title="Merge down (Ctrl+E)">⤓</button><button id="ldel" title="Delete layer">🗑</button>
+      <button id="lmask" title="Add layer mask (from selection if one exists)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="currentColor"/></svg></button><button id="lmerge" title="Merge down (Ctrl+E)">⤓</button><button id="ldel" title="Delete layer">🗑</button>
     </div>`;
   const sel = $<HTMLSelectElement>('lblend');
   sel.innerHTML = BLEND_MODES.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
@@ -98,17 +119,22 @@ export function initPanels() {
   $('lnew').onclick = () => app.doc.addLayer();
   $('ldup').onclick = () => app.doc.duplicateLayer();
   $('ldel').onclick = () => app.doc.removeLayer();
+  $('lmask').onclick = () => {
+    const d = app.doc;
+    if (d.active.mask) return app.toast('Layer already has a mask (Layer ▸ Layer Mask)');
+    d.addMask(d.selection ? 'selection' : 'reveal');
+  };
   $('lmerge').onclick = () => app.doc.mergeDown();
   $('lup').onclick = () => { const d = app.doc, i = d.layers.indexOf(d.active); d.moveLayer(i, i + 1); };
   $('ldown').onclick = () => { const d = app.doc, i = d.layers.indexOf(d.active); d.moveLayer(i, i - 1); };
   $('historypanel').innerHTML = `<h3>History</h3><div id="hlist"></div>`;
 }
 
-function thumb(l: Layer) {
+function thumb(src: HTMLCanvasElement) {
   const c = document.createElement('canvas');
-  const s = Math.min(1, 80 / l.canvas.width, 64 / l.canvas.height);
-  c.width = Math.max(1, Math.round(l.canvas.width * s)); c.height = Math.max(1, Math.round(l.canvas.height * s));
-  c.getContext('2d')!.drawImage(l.canvas, 0, 0, c.width, c.height);
+  const s = Math.min(1, 80 / src.width, 64 / src.height);
+  c.width = Math.max(1, Math.round(src.width * s)); c.height = Math.max(1, Math.round(src.height * s));
+  c.getContext('2d')!.drawImage(src, 0, 0, c.width, c.height);
   return c;
 }
 
@@ -121,7 +147,18 @@ export function renderLayers() {
     row.draggable = true;
     const eye = document.createElement('span'); eye.className = 'eye' + (l.visible ? '' : ' off'); eye.textContent = '👁';
     eye.onclick = (e) => { e.stopPropagation(); doc.setProp(l, 'visible', !l.visible); };
-    const name = document.createElement('span'); name.className = 'name'; name.textContent = l.name; name.title = l.name;
+    const pix = thumb(l.canvas); pix.classList.add('lthumb');
+    pix.classList.toggle('target', l === doc.active && !l.maskMode);
+    pix.onclick = () => doc.setEditMask(l, false);
+    const parts: HTMLElement[] = [eye, pix];
+    if (l.mask) {
+      const m = thumb(l.mask); m.classList.add('mthumb');
+      m.classList.toggle('target', l === doc.active && l.maskMode); m.classList.toggle('off', !l.maskEnabled);
+      m.title = 'Layer mask — click to edit, Shift+click to enable/disable';
+      m.onclick = (e) => { e.stopPropagation(); if (e.shiftKey) { doc.select(l); doc.toggleMask(l); } else doc.setEditMask(l, true); };
+      parts.push(m);
+    }
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = (l.text ? 'T  ' : '') + l.name; name.title = l.name;
     name.ondblclick = () => {
       const inp = document.createElement('input'); inp.type = 'text'; inp.value = l.name;
       name.textContent = ''; name.append(inp); inp.focus(); inp.select();
@@ -133,7 +170,7 @@ export function renderLayers() {
     row.ondragover = (e) => { if (e.dataTransfer!.types.includes('text/layer')) { e.preventDefault(); row.classList.add('dragover'); } };
     row.ondragleave = () => row.classList.remove('dragover');
     row.ondrop = (e) => { e.preventDefault(); row.classList.remove('dragover'); doc.moveLayer(Number(e.dataTransfer!.getData('text/layer')), doc.layers.indexOf(l)); };
-    row.append(eye, thumb(l), name);
+    row.append(...parts, name);
     list.append(row);
   });
   const a = doc.active;
@@ -157,6 +194,8 @@ export function renderTabs(switchTo: (i: number) => void, close: (i: number) => 
   });
 }
 
+app.on('textsync', () => renderOptions());
+
 export function initStatus() {
   $('status').innerHTML = `<span id="sdoc"></span><span id="scur"></span><span class="sp"></span><button id="sfit">Fit</button><button id="s100">100%</button><span id="szoom"></span>`;
   $('sfit').onclick = () => app.view.fit();
@@ -165,7 +204,7 @@ export function initStatus() {
 export function renderStatus() {
   const d = app.doc, v = app.view;
   if (!d) return;
-  $('sdoc').textContent = `${d.width} × ${d.height} px`;
+  $('sdoc').textContent = `${d.width} × ${d.height} px · ${d.active.name}${d.active.maskMode ? ' (mask)' : ''}`;
   $('szoom').textContent = Math.round(v.zoom * 100) + '%';
   const c = v.cursorDoc;
   $('scur').textContent = c ? `${Math.floor(c.x)}, ${Math.floor(c.y)}` : '';

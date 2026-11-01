@@ -1,9 +1,10 @@
 import type { Doc } from './doc';
+import { FONTS } from './text';
 import type { Viewer } from './viewer';
 
-export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand';
+export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text';
 
-type Evt = 'tool' | 'color' | 'doc' | 'options' | 'history';
+type Evt = 'tool' | 'color' | 'doc' | 'options' | 'history' | 'textstyle' | 'textsync';
 
 class App {
   docs: Doc[] = [];
@@ -14,6 +15,7 @@ class App {
   toolId: ToolId = 'brush';
   brush = { size: 24, hardness: 0.7, opacity: 1, flow: 1, spacing: 0.12 };
   fill = { tolerance: 32, contiguous: true };
+  text = { font: FONTS[0][1], size: 48, bold: false, italic: false, align: 'left' as 'left' | 'center' | 'right' };
   gradient = { mode: 'fg-bg' as 'fg-bg' | 'fg-transparent' };
   private subs = new Map<Evt, Set<() => void>>();
   on(e: Evt, fn: () => void) { if (!this.subs.has(e)) this.subs.set(e, new Set()); this.subs.get(e)!.add(fn); }
@@ -36,3 +38,11 @@ export const hexToRgb = (h: string): [number, number, number] => {
 };
 export const rgbToHex = (r: number, g: number, b: number) =>
   '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+/** Luminance of a color as a gray hex (used when painting on layer masks). */
+export const grayOf = (h: string) => {
+  const [r, g, b] = hexToRgb(h);
+  const v = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+  return rgbToHex(v, v, v);
+};
+/** Color to paint with on the active edit target (grayscale when editing a mask). */
+export const paintColor = (c: string) => (app.doc.active.maskMode ? grayOf(c) : c);
