@@ -83,6 +83,8 @@ export class Layer {
   parent: Layer | null = null;
   /** Panel state: children hidden in the Layers panel. */
   collapsed = false;
+  /** Clipped to the nearest unclipped layer below it (same group): only shows where that layer has pixels. */
+  clipped = false;
   private alphaCanvas: HTMLCanvasElement | null = null;
   private maskVer = 0;
   private alphaVer = -1;
@@ -218,7 +220,7 @@ export class Doc {
     if (src.isGroup) return this.duplicateGroup(src);
     const at = this.layers.indexOf(src) + 1;
     const l = this.addLayer(`${src.name} copy`, cloneCanvas(src.canvas), at);
-    l.parent = src.parent;
+    l.parent = src.parent; l.clipped = src.clipped;
     l.opacity = src.opacity; l.blend = src.blend; l.visible = src.visible;
     if (src.mask) { l.mask = cloneCanvas(src.mask); l.maskEnabled = src.maskEnabled; }
     if (src.text) l.text = { ...src.text };
@@ -337,7 +339,7 @@ export class Doc {
     const block = this.blockOf(g), map = new Map<Layer, Layer>();
     for (const e of block) {
       const c = e.isGroup ? Layer.group(e.name) : new Layer(e.name, cloneCanvas(e.canvas));
-      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed;
+      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped;
       if (e.mask) { c.mask = cloneCanvas(e.mask); c.maskEnabled = e.maskEnabled; }
       if (e.text) c.text = { ...e.text };
       if (e.adjustment) c.adjustment = cloneAdjustment(e.adjustment);
@@ -362,9 +364,56 @@ export class Doc {
       composite({ width: this.width, height: this.height, layers: inside, stroke: null, selMask: null } as unknown as Doc, ctxOf(c));
       if (g.mask && g.maskEnabled) { const x = ctxOf(c); x.globalCompositeOperation = 'destination-in'; x.drawImage(g.maskAlpha(), 0, 0); x.globalCompositeOperation = 'source-over'; }
       const m = new Layer(g.name, c);
-      m.opacity = g.opacity; m.visible = g.visible; m.blend = g.blend === 'pass through' ? 'normal' : g.blend; m.parent = g.parent;
+      m.opacity = g.opacity; m.visible = g.visible; m.blend = g.blend === 'pass through' ? 'normal' : g.blend; m.parent = g.parent; m.clipped = g.clipped;
       const drop = new Set(inside);
       this.layers = this.layers.filter((e) => !drop.has(e)).map((e) => (e === g ? m : e));
+      this.active = m; this.multi.clear();
+    });
+  }
+
+  // ---- clipping masks ----------------------------------------------------------
+  /** The layer `l` is clipped to: the nearest unclipped sibling below it (adjustment layers can't be bases). */
+  clipBase(l: Layer): Layer | null {
+    if (!l.clipped) return null;
+    const sibs = this.layers.filter((e) => e.parent === l.parent);
+    for (let i = sibs.indexOf(l) - 1; i >= 0; i--) if (!sibs[i].clipped) return sibs[i].adjustment ? null : sibs[i];
+    return null;
+  }
+  /** Layers clipped to `base`, bottom to top. */
+  clipStackOf(base: Layer): Layer[] { return this.layers.filter((e) => e.clipped && this.clipBase(e) === base); }
+  setClipped(list: Layer[], on: boolean) {
+    const changed = list.filter((l) => l.clipped !== on);
+    if (!changed.length) return;
+    changed.forEach((l) => (l.clipped = on));
+    this.history.push({
+      label: on ? 'Create Clipping Mask' : 'Release Clipping Mask',
+      undo: () => { changed.forEach((l) => (l.clipped = !on)); this.emit('structure'); },
+      redo: () => { changed.forEach((l) => (l.clipped = on)); this.emit('structure'); },
+    });
+    this.emit('structure');
+  }
+  /** Create (or, if already clipped, release) a clipping mask for the selected layers. */
+  toggleClip() {
+    const sel = this.selectedLayers();
+    if (sel.every((l) => l.clipped)) return this.setClipped(sel, false);
+    const ok = sel.filter((l) => !l.clipped && this.layers.some((e) => e.parent === l.parent && this.layers.indexOf(e) < this.layers.indexOf(l)));
+    if (!ok.length) { this.notice('There is no layer below to clip to'); return; }
+    this.setClipped(ok, true);
+  }
+  /** Flatten a base layer and the layers clipped to it into one layer. */
+  mergeClipStack(base = this.active) {
+    const stack = this.clipStackOf(base);
+    if (!stack.length) { this.notice('No layers are clipped to this layer'); return; }
+    const parts = [...this.blockOf(base), ...stack.flatMap((s) => this.blockOf(s))], drop = new Set(parts);
+    this.structEdit('Merge Clipping Mask', () => {
+      const keep = { o: base.opacity, b: base.blend, v: base.visible };
+      base.opacity = 1; base.visible = true; base.blend = base.isGroup ? 'pass through' : 'normal';
+      const c = makeCanvas(this.width, this.height);
+      composite({ width: this.width, height: this.height, layers: this.layers.filter((e) => drop.has(e)), stroke: null, selMask: null } as unknown as Doc, ctxOf(c));
+      base.opacity = keep.o; base.blend = keep.b; base.visible = keep.v;
+      const m = new Layer(base.name, c);
+      m.opacity = keep.o; m.blend = keep.b === 'pass through' ? 'normal' : keep.b; m.visible = keep.v; m.parent = base.parent;
+      this.layers = this.layers.flatMap((e) => (e === base ? [m] : drop.has(e) ? [] : [e]));
       this.active = m; this.multi.clear();
     });
   }
@@ -399,7 +448,7 @@ export class Doc {
   }
   /** Compact structural fingerprint ("[A B [C D]g1]") for comparing stack shapes in tests. */
   signature(): string {
-    const f = (ns: LayerNode[]): string => ns.map((n) => (n.layer.isGroup ? `[${n.layer.name}:${f(n.children)}]` : n.layer.name)).join(',');
+    const f = (ns: LayerNode[]): string => ns.map((n) => (n.layer.isGroup ? `[${n.layer.name}${n.layer.clipped ? '^' : ''}:${f(n.children)}]` : n.layer.name + (n.layer.clipped ? '^' : ''))).join(',');
     return f(this.tree());
   }
 
@@ -453,6 +502,7 @@ export class Doc {
     if (below.parent !== l.parent) { this.notice('Nothing below this layer in its group to merge into'); return; }
     if (below.isGroup) { this.notice('Cannot merge into a group — use Merge Group'); return; }
     if (below.adjustment) { this.notice('Cannot merge into an adjustment layer'); return; }
+    if (below.clipped && !l.clipped) { this.notice('Release the clipping mask first (or use Merge Clipping Mask)'); return; }
     const belowBefore = captureLayer(below);
     const prevActive = this.active;
     const merged = bakedCanvas(below);           // bake the lower layer's mask first
@@ -462,10 +512,18 @@ export class Doc {
       // an adjustment merged down is applied to the layer below only
       if (l.visible) applyAdjustmentOnto(bctx, this.width, this.height, l, l.mask && l.maskEnabled && !l.maskIsFull() ? l.maskAlpha() : null);
     } else {
+      const content = bakedCanvas(l);
+      const base = l.clipped ? this.clipBase(l) : null;
+      if (base) {                                   // a clipped layer only contributes where its base has pixels
+        const cx = ctxOf(content);
+        cx.globalCompositeOperation = 'destination-in';
+        cx.drawImage(base === below ? merged : bakedCanvas(base), 0, 0);
+        cx.globalCompositeOperation = 'source-over';
+      }
       bctx.save();
       bctx.globalAlpha = l.visible ? l.opacity : 0;
       bctx.globalCompositeOperation = blendOp(l.blend);
-      bctx.drawImage(bakedCanvas(l), 0, 0);
+      bctx.drawImage(content, 0, 0);
       bctx.restore();
     }
     const belowAfter = captureLayer(below);

@@ -78,7 +78,7 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
       if (c.children) {
         // A group: its contents go first, then the group entry itself (groups follow their children in the stack).
         const g = Layer.group(c.name || 'Group');
-        g.parent = parent; g.visible = !c.hidden; g.opacity = c.opacity ?? 1; g.collapsed = c.opened === false;
+        g.parent = parent; g.visible = !c.hidden; g.opacity = c.opacity ?? 1; g.collapsed = c.opened === false; g.clipped = !!c.clipping;
         const bm = c.blendMode as string | undefined;
         g.blend = !bm || bm === 'pass through' ? 'pass through' : bm;
         importMask(c, g);
@@ -89,7 +89,7 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
       const canvas = makeCanvas(psd.width, psd.height);
       if (c.canvas) ctxOf(canvas).drawImage(c.canvas, c.left ?? 0, c.top ?? 0);
       const l = new Layer(c.name || 'Layer', canvas);
-      l.parent = parent; l.visible = !c.hidden; l.opacity = c.opacity ?? 1;
+      l.parent = parent; l.visible = !c.hidden; l.opacity = c.opacity ?? 1; l.clipped = !!c.clipping;
       importMask(c, l);
       if (c.adjustment) {
         const a = fromPsdAdjustment(c.adjustment);
@@ -125,7 +125,7 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
       children: doc.tree().map(function toPsd(n): PsdLayer {
         const l = n.layer;
         return {
-          name: l.name, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible,
+          name: l.name, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible, clipping: l.clipped,
           ...(l.isGroup ? { children: n.children.map(toPsd), opened: !l.collapsed } : l.adjustment ? { adjustment: toPsdAdjustment(l.adjustment) } : { canvas: l.canvas }),
           blendMode: l.blend as PsdLayer['blendMode'],
           mask: l.mask ? { canvas: l.mask, left: 0, top: 0, right: doc.width, bottom: doc.height, defaultColor: 0, disabled: !l.maskEnabled } : undefined,

@@ -76,56 +76,109 @@ export function applyAdjustmentOnto(ctx: CanvasRenderingContext2D, w: number, h:
 }
 
 const groupBufs: HTMLCanvasElement[] = [];
+const clipBufs: HTMLCanvasElement[] = [];
 function groupBuf(depth: number, w: number, h: number) {
   let c = groupBufs[depth];
   if (!c || c.width !== w || c.height !== h) c = groupBufs[depth] = makeCanvas(w, h);
   return c;
 }
+function clipBuf(depth: number, w: number, h: number) {
+  let c = clipBufs[depth];
+  if (!c || c.width !== w || c.height !== h) c = clipBufs[depth] = makeCanvas(w, h);
+  return c;
+}
+const resetCtx = (x: CanvasRenderingContext2D) => { x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over'; x.filter = 'none'; };
+const blendFor = (l: Layer): GlobalCompositeOperation => (l.isGroup && l.blend === 'pass through' ? 'source-over' : blendOp(l.blend));
 
-function drawNodes(doc: Doc, nodes: LayerNode[], ctx: CanvasRenderingContext2D, includeHidden: boolean, depth: number) {
-  const { width: w, height: h } = doc;
-  for (const node of nodes) {
-    const layer = node.layer;
-    if ((!layer.visible && !includeHidden) || layer.hiddenForEdit) continue;
-    let live = doc.stroke && doc.stroke.layer === layer ? doc.stroke : null;
-    if (live && doc.selMask) live = { ...live, canvas: clipToSelection(doc, live.canvas, scratch(4, w, h)) };
-    let alpha: HTMLCanvasElement | null = null;
-    if (layer.mask && layer.maskEnabled) {
-      alpha = live?.onMask ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h)) : layer.maskAlpha();
-    }
-    if (layer.isGroup) {
-      // Pass Through groups only matter when something (opacity / a mask that hides pixels) needs them isolated.
-      const passThrough = layer.blend === 'pass through';
-      const needsMask = !!alpha && (!!live?.onMask || !layer.maskIsFull());
-      if (passThrough && layer.opacity >= 1 && !needsMask) { drawNodes(doc, node.children, ctx, includeHidden, depth); continue; }
-      const buf = groupBuf(depth, w, h), bx = ctxOf(buf);
-      bx.setTransform(1, 0, 0, 1, 0, 0); bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over'; bx.filter = 'none';
-      bx.clearRect(0, 0, w, h);
-      drawNodes(doc, node.children, bx, includeHidden, depth + 1);
-      if (needsMask) { bx.globalCompositeOperation = 'destination-in'; bx.drawImage(alpha!, 0, 0); bx.globalCompositeOperation = 'source-over'; }
-      ctx.globalAlpha = layer.opacity;
-      ctx.globalCompositeOperation = passThrough ? 'source-over' : blendOp(layer.blend);
-      ctx.drawImage(buf, 0, 0);
-      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+/** The live-stroke state for a layer and its mask coverage as an alpha canvas (null = no / fully-revealing mask). */
+function maskAlphaFor(doc: Doc, layer: Layer, w: number, h: number) {
+  let live = doc.stroke && doc.stroke.layer === layer ? doc.stroke : null;
+  if (live && doc.selMask) live = { ...live, canvas: clipToSelection(doc, live.canvas, scratch(4, w, h)) };
+  let alpha: HTMLCanvasElement | null = null;
+  if (layer.mask && layer.maskEnabled) {
+    alpha = live?.onMask ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h)) : layer.maskAlpha();
+  }
+  return { live, alpha };
+}
+
+/** Draw one node. `neutral` renders it at full opacity / Normal (used inside clipping stacks, where the caller applies them). */
+function drawNode(doc: Doc, node: LayerNode, ctx: CanvasRenderingContext2D, includeHidden: boolean, depth: number, neutral = false) {
+  const { width: w, height: h } = doc, layer = node.layer;
+  if ((!layer.visible && !includeHidden) || layer.hiddenForEdit) return;
+  const { live, alpha } = maskAlphaFor(doc, layer, w, h);
+  const opacity = neutral ? 1 : layer.opacity, op = neutral ? 'source-over' : blendFor(layer);
+  if (layer.isGroup) {
+    // Pass Through groups only matter when something (opacity / a mask that hides pixels) needs them isolated.
+    const passThrough = layer.blend === 'pass through' || neutral;
+    const needsMask = !!alpha && (!!live?.onMask || !layer.maskIsFull());
+    if (passThrough && opacity >= 1 && !needsMask) { drawNodes(doc, node.children, ctx, includeHidden, depth); return; }
+    const buf = groupBuf(depth, w, h), bx = ctxOf(buf);
+    resetCtx(bx); bx.clearRect(0, 0, w, h);
+    drawNodes(doc, node.children, bx, includeHidden, depth + 1);
+    if (needsMask) { bx.globalCompositeOperation = 'destination-in'; bx.drawImage(alpha!, 0, 0); bx.globalCompositeOperation = 'source-over'; }
+    ctx.globalAlpha = opacity; ctx.globalCompositeOperation = op;
+    ctx.drawImage(buf, 0, 0);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    return;
+  }
+  if (layer.adjustment) { applyAdjustmentOnto(ctx, w, h, layer, alpha && !live?.onMask && layer.maskIsFull() ? null : alpha); return; }
+  let src = layer.canvas;
+  if (live && !live.onMask) src = withStroke(scratch(0, w, h), layer.canvas, live);
+  if (alpha) {
+    const b = scratch(3, w, h), bx = ctxOf(b);
+    bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over';
+    bx.clearRect(0, 0, w, h);
+    bx.drawImage(src, 0, 0);
+    bx.globalCompositeOperation = 'destination-in';
+    bx.drawImage(alpha, 0, 0);
+    bx.globalCompositeOperation = 'source-over';
+    src = b;
+  }
+  ctx.globalAlpha = opacity;
+  ctx.globalCompositeOperation = op;
+  ctx.drawImage(src, 0, 0);
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+}
+
+/**
+ * A clipping stack: the base layer plus the layers clipped to it, rendered as one isolated unit. Clipped
+ * content only shows where the base has pixels; the base's opacity / blend mode apply to the whole stack.
+ */
+function drawClipStack(doc: Doc, base: LayerNode, clipped: LayerNode[], ctx: CanvasRenderingContext2D, includeHidden: boolean, depth: number) {
+  const { width: w, height: h } = doc, b = base.layer;
+  if ((!b.visible && !includeHidden) || b.hiddenForEdit) return;          // hiding the base hides everything clipped to it
+  const buf = groupBuf(depth, w, h), bx = ctxOf(buf);
+  resetCtx(bx); bx.clearRect(0, 0, w, h);
+  drawNode(doc, base, bx, includeHidden, depth + 1, true);
+  const tmp = clipBuf(depth, w, h), tx = ctxOf(tmp);
+  for (const c of clipped) {
+    const L = c.layer;
+    if ((!L.visible && !includeHidden) || L.hiddenForEdit) continue;
+    if (L.adjustment) {                                                      // acts on the stack so far; outside the base there are no pixels to change
+      const { live, alpha } = maskAlphaFor(doc, L, w, h);
+      applyAdjustmentOnto(bx, w, h, L, alpha && !live?.onMask && L.maskIsFull() ? null : alpha);
       continue;
     }
-    if (layer.adjustment) { applyAdjustmentOnto(ctx, w, h, layer, alpha && !live?.onMask && layer.maskIsFull() ? null : alpha); continue; }
-    let src = layer.canvas;
-    if (live && !live.onMask) src = withStroke(scratch(0, w, h), layer.canvas, live);
-    if (alpha) {
-      const b = scratch(3, w, h), bx = ctxOf(b);
-      bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over';
-      bx.clearRect(0, 0, w, h);
-      bx.drawImage(src, 0, 0);
-      bx.globalCompositeOperation = 'destination-in';
-      bx.drawImage(alpha, 0, 0);
-      bx.globalCompositeOperation = 'source-over';
-      src = b;
-    }
-    ctx.globalAlpha = layer.opacity;
-    ctx.globalCompositeOperation = blendOp(layer.blend);
-    ctx.drawImage(src, 0, 0);
-    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    resetCtx(tx); tx.clearRect(0, 0, w, h);
+    drawNode(doc, c, tx, includeHidden, depth + 1, true);
+    tx.globalCompositeOperation = 'destination-in'; tx.drawImage(buf, 0, 0); tx.globalCompositeOperation = 'source-over';   // cut to the base's shape
+    bx.globalAlpha = L.opacity; bx.globalCompositeOperation = blendFor(L);
+    bx.drawImage(tmp, 0, 0);
+    bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over';
+  }
+  ctx.globalAlpha = b.opacity; ctx.globalCompositeOperation = blendFor(b);
+  ctx.drawImage(buf, 0, 0);
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawNodes(doc: Doc, nodes: LayerNode[], ctx: CanvasRenderingContext2D, includeHidden: boolean, depth: number) {
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    let j = i + 1;
+    // layers flagged "clipped" directly above this one are clipped to it (unless it is an adjustment layer or itself clipped)
+    if (!node.layer.clipped && !node.layer.adjustment) while (j < nodes.length && nodes[j].layer.clipped) j++;
+    if (j > i + 1) { drawClipStack(doc, node, nodes.slice(i + 1, j), ctx, includeHidden, depth); i = j - 1; }
+    else drawNode(doc, node, ctx, includeHidden, depth);
   }
 }
 

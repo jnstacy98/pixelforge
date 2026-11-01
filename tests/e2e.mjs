@@ -745,13 +745,14 @@ const stress = await page.evaluate(() => {
   const total = { problems: [], undoBad: 0, steps: 0, origOK: true, redoOK: true, groups: 0, ops: 0 };
   for (const seed0 of [12345, 777, 20240601]) {
     window.__blank(80, 60); const a = window.__app, d = a.doc;
+    const stressCtx = Object.assign(document.createElement('canvas'), { width: 80, height: 60 }).getContext('2d');
     d.layers[0].name = 'L0';
     for (let i = 1; i < 6; i++) { const l = d.addLayer('L' + i); l.ctx.fillStyle = `hsl(${i * 55},70%,50%)`; l.ctx.fillRect(i * 8, i * 5, 20, 20); }
     let seed = seed0; const rnd = () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
     const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
     const start = d.history.depth, sigs = { [start]: d.signature() };
     for (let i = 0; i < 85; i++) {                        // 85 ops + 6 setup steps stay under the 100-step history cap
-      const all = d.layers, groups = all.filter((l) => l.isGroup), kind = pick(['group', 'group', 'ungroup', 'move', 'move', 'move', 'delete', 'dup', 'newgroup', 'addlayer', 'merge']);
+      const all = d.layers, groups = all.filter((l) => l.isGroup), kind = pick(['group', 'group', 'ungroup', 'move', 'move', 'move', 'delete', 'dup', 'newgroup', 'addlayer', 'merge', 'clip', 'clip']);
       d.select(pick(all));
       try {
         if (kind === 'group') { const k = 1 + Math.floor(rnd() * 3), sel = [pick(all)]; for (let j = 1; j < k; j++) sel.push(pick(all.filter((l) => l.parent === sel[0].parent))); d.groupLayers(sel); }
@@ -762,6 +763,8 @@ const stress = await page.evaluate(() => {
         else if (kind === 'newgroup') d.newGroup();
         else if (kind === 'addlayer') d.addLayer('N' + i);
         else if (kind === 'merge') { const g = groups.length ? pick(groups) : null; if (g && rnd() < 0.5) d.mergeGroup(g); else d.mergeDown(pick(all)); }
+      else if (kind === 'clip') { const t = pick(all); d.select(t); rnd() < 0.2 && d.clipStackOf(t).length ? d.mergeClipStack(t) : d.toggleClip(); }
+      window.__composite(d, stressCtx);
       } catch (e) { total.problems.push(`seed ${seed0} op ${i} ${kind} threw ${e}`); }
       const v = d.validate(); if (v.length) total.problems.push(`seed ${seed0} after op ${i} (${kind}): ${v.join('; ')}`);
       sigs[d.history.depth] = d.signature(); total.ops++;
@@ -782,6 +785,129 @@ const stress = await page.evaluate(() => {
 assert.deepEqual(stress.problems, []); ok(`stress: ${stress.ops} random group/ungroup/move/delete/duplicate/merge operations across 3 seeds kept the stack valid (${stress.steps} undoable steps)`);
 assert.equal(stress.undoBad, 0); assert.equal(stress.origOK, true); ok('stress: undoing every step restored exactly the structure recorded before it');
 assert.equal(stress.redoOK, true); ok('stress: redoing everything reproduces the final structure');
+
+
+// 6i. clipping masks
+const clipScene = async () => {
+  await page.evaluate(() => {
+    window.__blank(400, 300); const a = window.__app, d = a.doc;
+    d.layers[0].name = 'Base';
+    const S = d.addLayer('Shape'); S.ctx.fillStyle = '#e02020'; S.ctx.beginPath(); S.ctx.arc(150, 150, 60, 0, 7); S.ctx.fill();
+    const P = d.addLayer('Paint'); P.ctx.fillStyle = '#2040e0'; P.ctx.fillRect(0, 0, 400, 300);
+    d.emit('structure'); a.setTool('move');
+  });
+  await wait();
+};
+const IN = [150, 150], OUT = [320, 150];
+await clipScene();
+assert.ok(near(await cpx(...IN), [32, 64, 224]) && near(await cpx(...OUT), [32, 64, 224])); ok('before clipping, the top layer covers everything');
+await page.keyboard.press('Control+Alt+g'); await wait();
+assert.equal(await gx(`return d.active.clipped`), true);
+assert.ok(near(await cpx(...IN), [32, 64, 224]) && near(await cpx(...OUT), [255, 255, 255])); ok('Ctrl+Alt+G clips the layer to the shape of the layer below');
+assert.equal(await page.locator('#layerlist .layer.clipped').count(), 1); assert.equal(await page.locator('#layerlist .layer.clipbase').count(), 1); ok('the panel marks the clipped layer (indented ↳) and underlines its base');
+await page.keyboard.press('Control+Alt+g'); await wait();
+assert.ok(near(await cpx(...OUT), [32, 64, 224])); ok('Ctrl+Alt+G again releases the clipping mask');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(near(await cpx(...OUT), [255, 255, 255])); await page.keyboard.press('Control+Shift+z'); await wait(); assert.ok(near(await cpx(...OUT), [32, 64, 224])); await page.keyboard.press('Control+z'); await wait(); ok('clipping and releasing are undoable');
+assert.equal(await G.sig(), 'Base,Shape,Paint^');
+
+// blend mode of a clipped layer works against the base, and only inside it
+await gx(`d.setProp(d.active, 'blend', 'multiply')`);
+assert.ok(near(await cpx(...IN), [28, 8, 28], 3)); assert.ok(near(await cpx(...OUT), [255, 255, 255])); ok('a clipped layer\'s blend mode (Multiply) blends with the base and is cut to its shape');
+await gx(`d.setProp(d.active, 'blend', 'normal')`);
+
+// the base's opacity applies to the whole stack
+await gx(`d.setProp(${G.byName('Shape')}, 'opacity', 0.5)`);
+assert.ok(near(await cpx(...IN), [143, 159, 239], 3)); assert.ok(near(await cpx(...OUT), [255, 255, 255])); ok('the base\'s opacity applies to the base and its clipped layers together');
+await gx(`d.setProp(${G.byName('Shape')}, 'opacity', 1)`);
+
+// hiding
+await gx(`d.setProp(${G.byName('Shape')}, 'visible', false)`);
+assert.ok(near(await cpx(...IN), [255, 255, 255])); ok('hiding the base hides the layers clipped to it');
+await gx(`d.setProp(${G.byName('Shape')}, 'visible', true); d.setProp(${G.byName('Paint')}, 'visible', false)`);
+assert.ok(near(await cpx(...IN), [224, 32, 32])); ok('hiding a clipped layer only hides that layer');
+await gx(`d.setProp(${G.byName('Paint')}, 'visible', true)`);
+
+// the base's own mask also cuts the clipped layers
+await gx(`d.select(${G.byName('Shape')}); d.addMask('reveal'); const m = d.active.mask.getContext('2d'); m.fillStyle = '#000'; m.fillRect(0, 0, 150, 300); d.active.touchMask(); d.emit('structure'); d.select(${G.byName('Paint')})`);
+assert.ok(near(await cpx(110, 150), [255, 255, 255]) && near(await cpx(190, 150), [32, 64, 224])); ok('a mask on the base layer also hides the clipped layers');
+await gx(`d.select(${G.byName('Shape')}); d.deleteMask(); d.select(${G.byName('Paint')})`);
+
+// several clipped layers
+await gx(`d.select(${G.byName('Paint')}); const P2 = d.addLayer('Paint2'); P2.ctx.fillStyle = '#20c040'; P2.ctx.fillRect(100, 100, 300, 200); d.emit('structure'); d.setClipped([P2], true)`);
+assert.equal(await G.sig(), 'Base,Shape,Paint^,Paint2^');
+assert.ok(near(await cpx(...IN), [32, 192, 64], 3)); assert.ok(near(await cpx(...OUT), [255, 255, 255])); assert.ok(near(await cpx(95, 150), [32, 64, 224])); ok('several layers can be clipped to the same base (upper ones stack over lower ones)');
+
+// clipping an adjustment layer limits it to the base
+await gx(`d.removeLayer(${G.byName('Paint2')}); d.removeLayer(${G.byName('Paint')}); d.select(${G.byName('Shape')}); d.addAdjustmentLayer(window.__defaultAdj('invert'), 'Inv'); d.setClipped([d.active], true)`);
+await wait();
+assert.ok(near(await cpx(...IN), [31, 223, 223], 3)); assert.ok(near(await cpx(...OUT), [255, 255, 255])); ok('a clipped adjustment layer (Invert) only affects the layer it is clipped to');
+await gx(`d.setClipped([d.active], false)`);
+assert.ok(near(await cpx(...OUT), [0, 0, 0])); ok('…whereas an unclipped one inverts everything below');
+await gx(`d.removeLayer(${G.byName('Inv')})`);
+
+// paint on a clipped layer: the layer keeps the paint, the image shows only the clipped part
+await gx(`d.select(${G.byName('Shape')}); const n = d.addLayer('Brush'); d.setClipped([n], true); return 1`);
+await page.evaluate(() => { const a = window.__app; a.setFg('#20c040'); a.brush.size = 40; a.brush.hardness = 1; a.brush.opacity = 1; a.brush.flow = 1; a.setTool('brush'); });
+await drag([20, 150], [380, 150]); await wait();
+assert.ok(near(await cpx(...IN), [32, 192, 64], 3)); assert.ok(near(await cpx(...OUT), [255, 255, 255])); ok('painting on a clipped layer shows only inside the base');
+assert.equal(await gx(`return ${G.byName('Brush')}.ctx.getImageData(320,150,1,1).data[3]`), 255); ok('…but the paint is still on the layer (clipping is non-destructive)');
+await page.evaluate(() => window.__app.setTool('move'));
+
+// clipped group, bottom-layer edge case, duplicate keeps the flag
+await gx(`d.select(${G.byName('Brush')}); const g = d.groupLayers([${G.byName('Brush')}]); d.setClipped([g], true); return 1`);
+assert.equal(await G.sig(), 'Base,Shape,[Group 1^:Brush^]'); assert.deepEqual(await G.bad(), []);
+assert.ok(near(await cpx(...IN), [32, 192, 64], 3)); assert.ok(near(await cpx(...OUT), [255, 255, 255])); ok('a group can be clipped too');
+await gx(`d.ungroup(d.active); d.setClipped([${G.byName('Brush')}], true)`);
+await gx(`d.setClipped([d.layers[0]], true)`); await wait();
+assert.ok(near(await cpx(...OUT), [255, 255, 255])); assert.equal(await page.locator('#layerlist .layer.clipped').count(), 1); ok('a clipped layer with nothing below it renders normally (and is not shown as clipped)');
+await gx(`d.setClipped([d.layers[0]], false); d.select(${G.byName('Brush')}); d.duplicateLayer()`);
+assert.equal(await G.sig(), 'Base,Shape,Brush^,Brush copy^'); ok('duplicating a clipped layer keeps it clipped');
+await gx(`d.removeLayer(${G.byName('Brush copy')})`);
+
+// Merge Down of a clipped layer bakes only the clipped part into its base; Merge Clipping Mask flattens the stack
+await gx(`const P = d.addLayer('Paint'); P.ctx.fillStyle = '#2040e0'; P.ctx.fillRect(0, 0, 400, 300); d.emit('structure'); d.setClipped([P], true); d.removeLayer(${G.byName('Brush')}); d.select(P)`);
+assert.equal(await G.sig(), 'Base,Shape,Paint^');
+const preMerge = [await cpx(...IN), await cpx(...OUT)];
+await gx(`d.mergeDown()`); await wait();
+assert.equal(await G.sig(), 'Base,Shape'); assert.ok(near(await cpx(...IN), preMerge[0]) && near(await cpx(...OUT), [255, 255, 255])); ok('Merge Down of a clipped layer paints only inside its base');
+assert.equal(await gx(`return ${G.byName('Shape')}.ctx.getImageData(320,150,1,1).data[3]`), 0); ok('…leaving the base transparent outside its shape');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await G.sig(), 'Base,Shape,Paint^');
+await gx(`const P2 = d.addLayer('Paint2'); P2.ctx.fillStyle = 'rgba(255,255,0,0.5)'; P2.ctx.fillRect(100, 100, 120, 120); d.setClipped([P2], true); d.setProp(${G.byName('Shape')}, 'opacity', 0.7)`);
+const preStack = [await cpx(...IN), await cpx(130, 130), await cpx(...OUT)];
+await gx(`d.mergeClipStack(${G.byName('Shape')})`); await wait();
+assert.equal(await G.sig(), 'Base,Shape');
+assert.ok(near(await cpx(...IN), preStack[0], 2) && near(await cpx(130, 130), preStack[1], 2) && near(await cpx(...OUT), preStack[2], 2)); ok('Merge Clipping Mask flattens the stack without changing the image');
+assert.equal(await gx(`return Math.round(${G.byName('Shape')}.opacity * 100)`), 70); ok('…keeping the base\'s opacity on the merged layer');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await G.sig(), 'Base,Shape,Paint^,Paint2^'); ok('undo restores the whole stack');
+// merging a normal layer into a clipped one is refused
+await gx(`d.select(${G.byName('Paint2')}); const top = d.addLayer('Top'); d.mergeDown(top); return 1`);
+assert.equal(await G.sig(), 'Base,Shape,Paint^,Paint2^,Top'); ok('merging an unclipped layer down into a clipped one is refused');
+
+// PSD round-trip keeps clipping (including inside groups) and the picture
+await page.evaluate(() => {
+  window.__blank(400, 300); const a = window.__app, d = a.doc;
+  d.layers[0].name = 'Base';
+  const mk = (n, col, fn) => { const l = d.addLayer(n); l.ctx.fillStyle = col; fn(l.ctx); return l; };
+  const S = mk('Shape', '#e02020', (c) => { c.beginPath(); c.arc(150, 150, 60, 0, 7); c.fill(); });
+  const P1 = mk('Stripes', '#2040e0', (c) => { for (let y = 0; y < 300; y += 20) c.fillRect(0, y, 400, 10); }); P1.blend = 'multiply';
+  const P2 = mk('Glow', '#ffee55', (c) => { c.beginPath(); c.arc(120, 120, 50, 0, 7); c.fill(); }); P2.opacity = 0.6;
+  d.setClipped([P1, P2], true);
+  const Free = mk('Free', '#20c040', (c) => c.fillRect(300, 200, 60, 60));
+  const S2 = mk('Shape2', '#aa30cc', (c) => c.fillRect(250, 40, 100, 80));
+  const P3 = mk('Dots', '#ffffff', (c) => { for (let x = 250; x < 350; x += 16) { c.beginPath(); c.arc(x, 80, 6, 0, 7); c.fill(); } }); d.setClipped([P3], true);
+  const grp = d.groupLayers([S2, P3]); grp.name = 'Box';
+  d.select(S); d.addMask('reveal'); const m = S.mask.getContext('2d'); m.fillStyle = '#000'; m.fillRect(0, 0, 100, 300); S.touchMask();
+  d.emit('structure');
+});
+await wait();
+const cpts = [[150, 150], [190, 100], [110, 150], [320, 220], [300, 80], [60, 60]];
+const cg = await page.evaluate((pts) => window.__groupRoundtrip(pts), cpts);
+assert.equal(cg.sigAfter, cg.sigBefore); assert.deepEqual(cg.clippedAfter, cg.clippedBefore); assert.deepEqual(cg.clippedBefore.sort(), ['Dots', 'Glow', 'Stripes']); ok(`PSD round-trip keeps clipping flags (${cg.sigAfter})`);
+for (let i = 0; i < cpts.length; i++) assert.ok(near(cg.after[i], cg.before[i], 2), `pixel ${cpts[i]}: ${cg.before[i]} vs ${cg.after[i]}`);
+ok('…and the composite image is identical after re-import');
 
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));

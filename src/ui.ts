@@ -147,7 +147,7 @@ export function initPanels() {
     <div id="layerlist"></div>
     <div class="lbtns">
       <button id="lnew" title="New layer (Ctrl+Shift+N)">＋</button><button id="ldup" title="Duplicate (Ctrl+J)">⧉</button><button id="lgroup" title="Group layers (Ctrl+G)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><path d="M3 6.5A1.5 1.5 0 014.5 5H9l2 2.5h8.5A1.5 1.5 0 0121 9v8.5a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 17.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
-      <button id="lup" title="Move up">▲</button><button id="ldown" title="Move down">▼</button>
+      <button id="lclip" title="Create / release clipping mask (Ctrl+Alt+G)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><path d="M5 4v10a3 3 0 003 3h10M14 13l4 4-4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button id="lup" title="Move up">▲</button><button id="ldown" title="Move down">▼</button>
       <button id="ladj" title="New adjustment layer"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor"/></svg></button><button id="lmask" title="Add layer mask (from selection if one exists)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="currentColor"/></svg></button><button id="lmerge" title="Merge down (Ctrl+E)">⤓</button><button id="ldel" title="Delete layer">🗑</button>
     </div>`;
   const sel = $<HTMLSelectElement>('lblend');
@@ -169,6 +169,7 @@ export function initPanels() {
   };
   $('lmerge').onclick = () => app.doc.mergeDown();
   $('lgroup').onclick = () => app.doc.groupLayers();
+  $('lclip').onclick = () => app.doc.toggleClip();
   $('lup').onclick = () => app.doc.nudgeNode(app.doc.active, 1);
   $('ldown').onclick = () => app.doc.nudgeNode(app.doc.active, -1);
   $('historypanel').innerHTML = `<h3>History</h3><div id="hlist"></div>`;
@@ -204,15 +205,17 @@ export function renderLayers() {
   const doc = app.doc, list = $('layerlist');
   list.innerHTML = '';
   const shown: Layer[] = [];            // rows in panel order (for Shift-range selection)
+  const bases = new Set(doc.layers.filter((x) => x.clipped).map((x) => doc.clipBase(x)));   // layers that have something clipped to them
   const rowOf = (l: Layer, depth: number) => {
     const row = document.createElement('div');
-    row.className = 'layer' + (l === doc.active ? ' active' : '') + (doc.multi.has(l) ? ' multi' : '') + (l.isGroup ? ' isgroup' : '');
+    row.className = 'layer' + (l === doc.active ? ' active' : '') + (doc.multi.has(l) ? ' multi' : '') + (l.isGroup ? ' isgroup' : '') + (l.clipped && doc.clipBase(l) ? ' clipped' : '') + (bases.has(l) ? ' clipbase' : '');
     row.dataset.layer = String(l.id);
-    row.style.paddingLeft = `${8 + depth * 16}px`;
+    row.style.paddingLeft = `${8 + depth * 16 + (l.clipped && doc.clipBase(l) ? 14 : 0)}px`;
     row.draggable = true;
     const eye = document.createElement('span'); eye.className = 'eye' + (l.visible ? (doc.isShown(l) ? '' : ' dim') : ' off'); eye.textContent = '👁';
     eye.onclick = (e) => { e.stopPropagation(); doc.setProp(l, 'visible', !l.visible); };
     const parts: HTMLElement[] = [eye];
+    if (l.clipped && doc.clipBase(l)) { const m = document.createElement('span'); m.className = 'clipmark'; m.textContent = '↳'; m.title = 'Clipped to the layer below'; parts.push(m); }
     if (l.isGroup) {
       const arrow = document.createElement('span'); arrow.className = 'arrow'; arrow.textContent = l.collapsed ? '▸' : '▾'; arrow.title = 'Expand / collapse';
       arrow.onclick = (e) => { e.stopPropagation(); l.collapsed = !l.collapsed; renderLayers(); };

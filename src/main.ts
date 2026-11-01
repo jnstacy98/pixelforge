@@ -140,6 +140,9 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Duplicate Layer', shortcut: 'Ctrl+J', action: () => app.doc.duplicateLayer() },
     { label: app.doc.active.isGroup ? 'Delete Group' : 'Delete Layer', action: () => app.doc.removeLayer() },
     '-',
+    { label: app.doc.active.clipped ? 'Release Clipping Mask' : 'Create Clipping Mask', shortcut: 'Ctrl+Alt+G', action: () => app.doc.toggleClip() },
+    ...(app.doc.clipStackOf(app.doc.active).length ? [{ label: 'Merge Clipping Mask', action: () => app.doc.mergeClipStack() }] : []),
+    '-',
     { label: 'New Group', action: () => app.doc.newGroup() },
     { label: 'Group Layers', shortcut: 'Ctrl+G', action: () => app.doc.groupLayers() },
     { label: 'Ungroup Layers', shortcut: 'Ctrl+Shift+G', action: () => app.doc.ungroup(app.doc.active.isGroup ? app.doc.active : app.doc.active.parent ?? app.doc.active) },
@@ -220,6 +223,7 @@ window.addEventListener('keydown', (e) => {
   if (isTyping(e) || isAdjusting()) return;
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   const doc = app.doc;
+  if (mod && e.altKey && e.code === 'KeyG') { e.preventDefault(); doc.toggleClip(); return; }
   if (mod) {
     const map: Record<string, () => void> = {
       z: () => (e.shiftKey ? doc.history.redo() : doc.history.undo()),
@@ -320,6 +324,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const sample = (d: Doc) => { const c = document.createElement('canvas'); c.width = d.width; c.height = d.height; const x = c.getContext('2d', { willReadFrequently: true })!; composite(d, x); return pts.map(([a, b]) => Array.from(x.getImageData(a, b, 1, 1).data)); };
   const data = await encode(app.doc, 'psd');
   const d2 = await importFile({ name: 'g.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
+  const clips = (d: Doc) => d.layers.filter((l) => l.clipped).map((l) => l.name);
   const info = (d: Doc) => d.layers.filter((l) => l.isGroup).map((l) => ({ name: l.name, opacity: Math.round(l.opacity * 100) / 100, blend: l.blend, visible: l.visible, hasMask: !!l.mask, collapsed: l.collapsed, parent: l.parent?.name ?? null }));
-  return { before: sample(app.doc), after: sample(d2), sigBefore: app.doc.signature(), sigAfter: d2.signature(), groupsBefore: info(app.doc), groupsAfter: info(d2), problems: d2.validate() };
+  return { before: sample(app.doc), after: sample(d2), sigBefore: app.doc.signature(), sigAfter: d2.signature(), groupsBefore: info(app.doc), groupsAfter: info(d2), problems: d2.validate(), clippedBefore: clips(app.doc), clippedAfter: clips(d2) };
 };
