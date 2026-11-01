@@ -69,6 +69,7 @@ class PaintTool implements Tool {
   private get erasing() { return this.erase && !this.onMask; }
 
   down(p: Pt, e?: PointerEvent) {
+    if (!(this.isClone && e?.altKey) && !app.doc.requirePaintable()) return;   // (Alt+click only sets a clone source)
     if (this.isClone && !this.startClone(p, e)) return;
     if (this.isSpot) this.takeSnap();
     const doc = app.doc;
@@ -251,6 +252,7 @@ class PaintTool implements Tool {
 class BucketTool implements Tool {
   cursor = 'crosshair';
   down(p: Pt) {
+    if (!app.doc.requirePaintable()) return;
     const doc = app.doc, layer = doc.active;
     const w = layer.target.width, h = layer.target.height;
     const sx = Math.floor(p.x), sy = Math.floor(p.y);
@@ -283,7 +285,7 @@ class BucketTool implements Tool {
 class GradientTool implements Tool {
   cursor = 'crosshair';
   private a: Pt | null = null; private b: Pt | null = null;
-  down(p: Pt) { this.a = p; this.b = p; }
+  down(p: Pt) { if (!app.doc.requirePaintable()) return; this.a = p; this.b = p; }
   move(p: Pt) { if (this.a) { this.b = p; app.doc.emit('selection'); } }
   up(p: Pt) {
     const a = this.a; this.a = null;
@@ -315,32 +317,44 @@ class GradientTool implements Tool {
 }
 
 // ---------------------------------------------------------------- move
-/** Moves the whole layer (pixels, linked mask and text position) or, with a selection, the selected pixels of the edit target. */
+/**
+ * Moves the active layer — pixels, linked mask and text position — or, for a group, everything inside it.
+ * With a selection (and a plain layer) it moves just the selected pixels of the edit target instead.
+ */
 class MoveTool implements Tool {
   cursor = 'move';
   private start: Pt | null = null;
-  private layer!: Layer;
-  private items: { get: () => HTMLCanvasElement; snap: HTMLCanvasElement }[] = [];
+  private items: { layer: Layer; get: () => HTMLCanvasElement; snap: HTMLCanvasElement }[] = [];
+  private texts: { layer: Layer; x: number; y: number }[] = [];
+  private layers: Layer[] = [];
+  private selMode = false;
   private selBefore: Rect | null = null;
   private selNow: Rect | null = null;
-  private textBefore: { x: number; y: number } | null = null;
-  private floating: HTMLCanvasElement | null = null;
   private selMaskBefore: HTMLCanvasElement | null = null;
+  private floating: HTMLCanvasElement | null = null;
   down(p: Pt) {
-    const doc = app.doc;
-    this.start = p; this.layer = doc.active;
-    const l = this.layer;
+    const doc = app.doc, l = doc.active;
+    this.start = p;
     this.selBefore = doc.selection; this.selNow = this.selBefore; this.selMaskBefore = doc.selMask;
-    const canvasItem = { get: () => l.canvas, snap: cloneCanvas(l.canvas) };
-    const maskItem = l.mask ? { get: () => l.mask!, snap: cloneCanvas(l.mask) } : null;
-    this.items = doc.selection ? [l.maskMode ? maskItem! : canvasItem] : maskItem ? [canvasItem, maskItem] : [canvasItem];
-    this.textBefore = !doc.selection && l.text ? { x: l.text.x, y: l.text.y } : null;
-    this.floating = doc.selMask ? clipToSelection(doc, this.items[0].snap) : null; // selected pixels, cut out
+    this.selMode = !!doc.selection && !l.isGroup;
+    this.layers = l.isGroup ? [...doc.layers.filter((e) => doc.isDescendant(e, l)), l] : [l];
+    this.items = [];
+    if (this.selMode) {
+      const c = l.maskMode ? l.mask! : l.canvas;
+      this.items = [{ layer: l, get: () => (l.maskMode ? l.mask! : l.canvas), snap: cloneCanvas(c) }];
+    } else {
+      for (const e of this.layers) {
+        if (!e.isGroup) this.items.push({ layer: e, get: () => e.canvas, snap: cloneCanvas(e.canvas) });
+        if (e.mask) this.items.push({ layer: e, get: () => e.mask!, snap: cloneCanvas(e.mask) });
+      }
+    }
+    this.texts = this.selMode ? [] : this.layers.filter((e) => e.text).map((e) => ({ layer: e, x: e.text!.x, y: e.text!.y }));
+    this.floating = this.selMode && doc.selMask ? clipToSelection(doc, this.items[0].snap) : null;   // selected pixels, cut out
   }
   move(p: Pt) {
     if (!this.start) return;
     const dx = Math.round(p.x - this.start.x), dy = Math.round(p.y - this.start.y), doc = app.doc;
-    const s = this.selBefore ? clampRect(this.selBefore, doc.width, doc.height) : null;
+    const s = this.selMode && this.selBefore ? clampRect(this.selBefore, doc.width, doc.height) : null;
     for (const it of this.items) {
       const c = it.get(), ctx = ctxOf(c);
       ctx.save();
@@ -362,28 +376,29 @@ class MoveTool implements Tool {
       this.selNow = { ...this.selBefore!, x: this.selBefore!.x + dx, y: this.selBefore!.y + dy }; doc.selection = this.selNow;
       if (this.selMaskBefore) doc.selShift = { dx, dy };
     }
-    if (this.textBefore && this.layer.text) { this.layer.text.x = this.textBefore.x + dx; this.layer.text.y = this.textBefore.y + dy; }
-    this.layer.touchMask();
+    for (const t of this.texts) { t.layer.text!.x = t.x + dx; t.layer.text!.y = t.y + dy; }
+    for (const l of this.layers) l.touchMask();
     doc.emit('pixels');
   }
   up() {
     if (!this.start) return;
     this.start = null;
-    const doc = app.doc, layer = this.layer, items = this.items, selB = this.selBefore, selN = this.selNow;
+    const doc = app.doc, items = this.items, texts = this.texts, layers = this.layers, selB = this.selBefore, selN = this.selNow;
     const maskB = this.selMaskBefore;
     let maskN = maskB;
     if (maskB && doc.selShift) { maskN = makeCanvas(maskB.width, maskB.height); ctxOf(maskN).drawImage(maskB, doc.selShift.dx, doc.selShift.dy); doc.selMask = maskN; }
     doc.selShift = null; this.floating = null;
     const after = items.map((it) => cloneCanvas(it.get()));
-    const tb = this.textBefore, ta = layer.text && tb ? { x: layer.text.x, y: layer.text.y } : null;
-    const put = (src: HTMLCanvasElement[], sel: Rect | null, sm: HTMLCanvasElement | null, t: { x: number; y: number } | null) => {
-      items.forEach((it, i) => { const x = ctxOf(it.get()); x.clearRect(0, 0, it.get().width, it.get().height); x.drawImage(src[i], 0, 0); });
+    const textsAfter = texts.map((t) => ({ x: t.layer.text!.x, y: t.layer.text!.y }));
+    const put = (src: HTMLCanvasElement[], sel: Rect | null, sm: HTMLCanvasElement | null, txt: { x: number; y: number }[]) => {
+      items.forEach((it, i) => { const c = it.get(), x = ctxOf(c); x.clearRect(0, 0, c.width, c.height); x.drawImage(src[i], 0, 0); });
       doc.selection = sel; doc.selMask = sm;
-      if (t && layer.text) { layer.text.x = t.x; layer.text.y = t.y; }
-      layer.touchMask(); doc.emit('structure');
+      texts.forEach((t, i) => { t.layer.text!.x = txt[i].x; t.layer.text!.y = txt[i].y; });
+      for (const l of layers) l.touchMask();
+      doc.emit('structure');
     };
-    const before = items.map((it) => it.snap);
-    doc.history.push({ label: 'Move', undo: () => put(before, selB, maskB, tb), redo: () => put(after, selN, maskN, ta) });
+    const before = items.map((it) => it.snap), textsBefore = texts.map((t) => ({ x: t.x, y: t.y }));
+    doc.history.push({ label: 'Move', undo: () => put(before, selB, maskB, textsBefore), redo: () => put(after, selN, maskN, textsAfter) });
     doc.emit('structure');
   }
 }

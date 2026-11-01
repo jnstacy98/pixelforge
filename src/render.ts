@@ -1,4 +1,4 @@
-import { Doc, blendOp, makeCanvas, ctxOf, grayToAlpha, type Layer, type Stroke } from './doc';
+import { Doc, blendOp, buildTree, makeCanvas, ctxOf, grayToAlpha, type Layer, type LayerNode, type Stroke } from './doc';
 import { applyLUTs, filterFor, lutsFor } from './adjust';
 import { clipToSelection } from './selection';
 
@@ -75,18 +75,39 @@ export function applyAdjustmentOnto(ctx: CanvasRenderingContext2D, w: number, h:
   ctx.globalCompositeOperation = 'source-over';
 }
 
-/** Composite all visible layers (plus any live stroke preview) onto ctx. */
-export function composite(doc: Doc, ctx: CanvasRenderingContext2D, includeHidden = false) {
+const groupBufs: HTMLCanvasElement[] = [];
+function groupBuf(depth: number, w: number, h: number) {
+  let c = groupBufs[depth];
+  if (!c || c.width !== w || c.height !== h) c = groupBufs[depth] = makeCanvas(w, h);
+  return c;
+}
+
+function drawNodes(doc: Doc, nodes: LayerNode[], ctx: CanvasRenderingContext2D, includeHidden: boolean, depth: number) {
   const { width: w, height: h } = doc;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  for (const layer of doc.layers) {
+  for (const node of nodes) {
+    const layer = node.layer;
     if ((!layer.visible && !includeHidden) || layer.hiddenForEdit) continue;
     let live = doc.stroke && doc.stroke.layer === layer ? doc.stroke : null;
     if (live && doc.selMask) live = { ...live, canvas: clipToSelection(doc, live.canvas, scratch(4, w, h)) };
     let alpha: HTMLCanvasElement | null = null;
     if (layer.mask && layer.maskEnabled) {
       alpha = live?.onMask ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h)) : layer.maskAlpha();
+    }
+    if (layer.isGroup) {
+      // Pass Through groups only matter when something (opacity / a mask that hides pixels) needs them isolated.
+      const passThrough = layer.blend === 'pass through';
+      const needsMask = !!alpha && (!!live?.onMask || !layer.maskIsFull());
+      if (passThrough && layer.opacity >= 1 && !needsMask) { drawNodes(doc, node.children, ctx, includeHidden, depth); continue; }
+      const buf = groupBuf(depth, w, h), bx = ctxOf(buf);
+      bx.setTransform(1, 0, 0, 1, 0, 0); bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over'; bx.filter = 'none';
+      bx.clearRect(0, 0, w, h);
+      drawNodes(doc, node.children, bx, includeHidden, depth + 1);
+      if (needsMask) { bx.globalCompositeOperation = 'destination-in'; bx.drawImage(alpha!, 0, 0); bx.globalCompositeOperation = 'source-over'; }
+      ctx.globalAlpha = layer.opacity;
+      ctx.globalCompositeOperation = passThrough ? 'source-over' : blendOp(layer.blend);
+      ctx.drawImage(buf, 0, 0);
+      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+      continue;
     }
     if (layer.adjustment) { applyAdjustmentOnto(ctx, w, h, layer, alpha && !live?.onMask && layer.maskIsFull() ? null : alpha); continue; }
     let src = layer.canvas;
@@ -104,7 +125,16 @@ export function composite(doc: Doc, ctx: CanvasRenderingContext2D, includeHidden
     ctx.globalAlpha = layer.opacity;
     ctx.globalCompositeOperation = blendOp(layer.blend);
     ctx.drawImage(src, 0, 0);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
   }
+}
+
+/** Composite all visible layers (groups included, plus any live stroke preview) onto ctx. */
+export function composite(doc: Doc, ctx: CanvasRenderingContext2D, includeHidden = false) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, doc.width, doc.height);
+  drawNodes(doc, buildTree(doc.layers), ctx, includeHidden, 0);
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
 }

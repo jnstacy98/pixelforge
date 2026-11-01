@@ -67,7 +67,7 @@ export class WandTool implements Tool {
   down(p: Pt, e: PointerEvent) {
     const doc = app.doc, x = Math.floor(p.x), y = Math.floor(p.y);
     if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) return;
-    const src = app.wand.allLayers ? flatten(doc) : doc.active.target;
+    const src = app.wand.allLayers || !doc.active.paintable ? flatten(doc) : doc.active.target;
     const d = ctxOf(src).getImageData(0, 0, doc.width, doc.height).data;
     const m = floodSelect(d, doc.width, doc.height, x, y, app.fill.tolerance, app.fill.contiguous, { x: 0, y: 0, w: doc.width, h: doc.height });
     if (!m.some((v) => v)) return;

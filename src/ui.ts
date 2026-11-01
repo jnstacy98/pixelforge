@@ -1,5 +1,5 @@
 import { app, type ToolId } from './state';
-import { BLEND_MODES } from './doc';
+import { BLEND_MODES, GROUP_BLEND_MODES, type Layer, type LayerNode } from './doc';
 import { FONTS } from './text';
 import { editAdjustment, newAdjustmentLayer } from './adjustdialog';
 import { ADJUSTMENT_LABELS, type AdjustmentType } from './adjust';
@@ -146,12 +146,11 @@ export function initPanels() {
     </div>
     <div id="layerlist"></div>
     <div class="lbtns">
-      <button id="lnew" title="New layer (Ctrl+Shift+N)">＋</button><button id="ldup" title="Duplicate (Ctrl+J)">⧉</button>
+      <button id="lnew" title="New layer (Ctrl+Shift+N)">＋</button><button id="ldup" title="Duplicate (Ctrl+J)">⧉</button><button id="lgroup" title="Group layers (Ctrl+G)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><path d="M3 6.5A1.5 1.5 0 014.5 5H9l2 2.5h8.5A1.5 1.5 0 0121 9v8.5a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 17.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
       <button id="lup" title="Move up">▲</button><button id="ldown" title="Move down">▼</button>
       <button id="ladj" title="New adjustment layer"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor"/></svg></button><button id="lmask" title="Add layer mask (from selection if one exists)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="currentColor"/></svg></button><button id="lmerge" title="Merge down (Ctrl+E)">⤓</button><button id="ldel" title="Delete layer">🗑</button>
     </div>`;
   const sel = $<HTMLSelectElement>('lblend');
-  sel.innerHTML = BLEND_MODES.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
   const op = $<HTMLInputElement>('lop');
   let startOpacity = 1;
   op.onpointerdown = () => (startOpacity = app.doc.active.opacity);
@@ -169,8 +168,9 @@ export function initPanels() {
     d.addMask(d.selection ? 'selection' : 'reveal');
   };
   $('lmerge').onclick = () => app.doc.mergeDown();
-  $('lup').onclick = () => { const d = app.doc, i = d.layers.indexOf(d.active); d.moveLayer(i, i + 1); };
-  $('ldown').onclick = () => { const d = app.doc, i = d.layers.indexOf(d.active); d.moveLayer(i, i - 1); };
+  $('lgroup').onclick = () => app.doc.groupLayers();
+  $('lup').onclick = () => app.doc.nudgeNode(app.doc.active, 1);
+  $('ldown').onclick = () => app.doc.nudgeNode(app.doc.active, -1);
   $('historypanel').innerHTML = `<h3>History</h3><div id="hlist"></div>`;
 }
 
@@ -198,17 +198,28 @@ function thumb(src: HTMLCanvasElement) {
   return c;
 }
 
+const FOLDER = '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 6.5A1.5 1.5 0 014.5 5H9l2 2.5h8.5A1.5 1.5 0 0121 9v8.5a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 17.5z" fill="currentColor" opacity=".85"/></svg>';
+
 export function renderLayers() {
   const doc = app.doc, list = $('layerlist');
   list.innerHTML = '';
-  [...doc.layers].reverse().forEach((l) => {
+  const shown: Layer[] = [];            // rows in panel order (for Shift-range selection)
+  const rowOf = (l: Layer, depth: number) => {
     const row = document.createElement('div');
-    row.className = 'layer' + (l === doc.active ? ' active' : '');
+    row.className = 'layer' + (l === doc.active ? ' active' : '') + (doc.multi.has(l) ? ' multi' : '') + (l.isGroup ? ' isgroup' : '');
+    row.dataset.layer = String(l.id);
+    row.style.paddingLeft = `${8 + depth * 16}px`;
     row.draggable = true;
-    const eye = document.createElement('span'); eye.className = 'eye' + (l.visible ? '' : ' off'); eye.textContent = '👁';
+    const eye = document.createElement('span'); eye.className = 'eye' + (l.visible ? (doc.isShown(l) ? '' : ' dim') : ' off'); eye.textContent = '👁';
     eye.onclick = (e) => { e.stopPropagation(); doc.setProp(l, 'visible', !l.visible); };
     const parts: HTMLElement[] = [eye];
-    if (l.adjustment) {
+    if (l.isGroup) {
+      const arrow = document.createElement('span'); arrow.className = 'arrow'; arrow.textContent = l.collapsed ? '▸' : '▾'; arrow.title = 'Expand / collapse';
+      arrow.onclick = (e) => { e.stopPropagation(); l.collapsed = !l.collapsed; renderLayers(); };
+      const icon = document.createElement('div'); icon.className = 'adjicon grpicon'; icon.innerHTML = FOLDER; icon.title = 'Group';
+      icon.onclick = () => doc.setEditMask(l, false);
+      parts.unshift(arrow); parts.push(icon);
+    } else if (l.adjustment) {
       const icon = document.createElement('div'); icon.className = 'adjicon'; icon.title = `${ADJUSTMENT_LABELS[l.adjustment.type]} — double-click to edit`;
       icon.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor"/></svg>';
       icon.ondblclick = (e) => { e.stopPropagation(); editAdjustment(l); };
@@ -233,19 +244,47 @@ export function renderLayers() {
       const done = () => { const v = inp.value.trim(); if (v && v !== l.name) doc.setProp(l, 'name', v); else renderLayers(); };
       inp.onblur = done; inp.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { inp.value = l.name; inp.blur(); } };
     };
-    row.onclick = () => doc.select(l);
-    row.ondragstart = (e) => e.dataTransfer!.setData('text/layer', String(doc.layers.indexOf(l)));
-    row.ondragover = (e) => { if (e.dataTransfer!.types.includes('text/layer')) { e.preventDefault(); row.classList.add('dragover'); } };
-    row.ondragleave = () => row.classList.remove('dragover');
-    row.ondrop = (e) => { e.preventDefault(); row.classList.remove('dragover'); doc.moveLayer(Number(e.dataTransfer!.getData('text/layer')), doc.layers.indexOf(l)); };
+    // click: plain = select; Ctrl/Cmd = toggle in selection; Shift = range
+    row.onclick = (e) => {
+      if (e.shiftKey && shown.includes(doc.active)) {
+        const a = shown.indexOf(doc.active), b = shown.indexOf(l);
+        doc.multi = new Set(shown.slice(Math.min(a, b), Math.max(a, b) + 1));
+        doc.select(l);
+      } else if (e.ctrlKey || e.metaKey) {
+        if (!doc.multi.size) doc.multi.add(doc.active);
+        doc.multi.has(l) ? doc.multi.delete(l) : doc.multi.add(l);
+        doc.select(l);
+      } else { doc.multi.clear(); doc.select(l); }
+    };
+    // drag & drop: top/bottom quarter = before/after, middle of a group = move inside it
+    const zone = (e: DragEvent) => {
+      const r = row.getBoundingClientRect(), f = (e.clientY - r.top) / r.height;
+      return l.isGroup ? (f < 0.25 ? 'above' : f > 0.75 ? 'below' : 'inside') : f < 0.5 ? 'above' : 'below';
+    };
+    const clear = () => row.classList.remove('dz-above', 'dz-below', 'dz-inside');
+    row.ondragstart = (e) => e.dataTransfer!.setData('text/layer', String(l.id));
+    row.ondragover = (e) => { if (e.dataTransfer!.types.includes('text/layer')) { e.preventDefault(); clear(); row.classList.add('dz-' + zone(e)); } };
+    row.ondragleave = clear;
+    row.ondrop = (e) => {
+      e.preventDefault(); clear();
+      const src = doc.layers.find((x) => String(x.id) === e.dataTransfer!.getData('text/layer'));
+      if (src && !doc.moveNode(src, l, zone(e) as 'above' | 'below' | 'inside')) app.toast('Cannot move a group into itself');
+    };
     row.append(...parts, name);
+    shown.push(l);
     list.append(row);
-  });
+  };
+  const walk = (nodes: LayerNode[], depth: number) => {
+    for (const n of [...nodes].reverse()) { rowOf(n.layer, depth); if (n.layer.isGroup && !n.layer.collapsed) walk(n.children, depth + 1); }
+  };
+  walk(doc.tree(), 0);
   const a = doc.active;
   $<HTMLInputElement>('lop').value = String(Math.round(a.opacity * 100));
   $('lopv').textContent = Math.round(a.opacity * 100) + '%';
-  $<HTMLSelectElement>('lblend').value = BLEND_MODES.some((m) => m.id === a.blend) ? a.blend : 'normal';
-  $<HTMLSelectElement>('lblend').disabled = !!a.adjustment;
+  const sel = $<HTMLSelectElement>('lblend'), modes = a.isGroup ? GROUP_BLEND_MODES : BLEND_MODES;
+  sel.innerHTML = modes.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
+  sel.value = modes.some((m) => m.id === a.blend) ? a.blend : 'normal';
+  sel.disabled = !!a.adjustment;
 }
 
 // ---------------------------------------------------------------- tabs & status
@@ -273,7 +312,7 @@ export function initStatus() {
 export function renderStatus() {
   const d = app.doc, v = app.view;
   if (!d) return;
-  $('sdoc').textContent = `${d.width} × ${d.height} px · ${d.active.name}${d.active.maskMode ? ' (mask)' : ''}`;
+  $('sdoc').textContent = `${d.width} × ${d.height} px · ${d.active.name}${d.active.isGroup ? ' (group)' : ''}${d.active.maskMode ? ' (mask)' : ''}`;
   $('szoom').textContent = Math.round(v.zoom * 100) + '%';
   const c = v.cursorDoc;
   $('scur').textContent = c ? `${Math.floor(c.x)}, ${Math.floor(c.y)}` : '';

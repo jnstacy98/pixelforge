@@ -39,6 +39,8 @@ export const BLEND_MODES: { id: string; label: string; op: GlobalCompositeOperat
   { id: 'color', label: 'Color', op: 'color' },
   { id: 'luminosity', label: 'Luminosity', op: 'luminosity' },
 ];
+/** Groups can additionally be Pass Through (the default: their contents composite as if ungrouped). */
+export const GROUP_BLEND_MODES = [{ id: 'pass through', label: 'Pass Through', op: 'source-over' as GlobalCompositeOperation }, ...BLEND_MODES];
 export const blendOp = (id: string): GlobalCompositeOperation =>
   BLEND_MODES.find((b) => b.id === id)?.op ?? 'source-over';
 
@@ -75,12 +77,27 @@ export class Layer {
   adjustment: AdjustmentData | null = null;
   /** Set while the text editor overlay is open on this layer. */
   hiddenForEdit = false;
+  /** 'group' layers have no pixels of their own: they hold other layers (those whose `parent` is this group). */
+  kind: 'layer' | 'group' = 'layer';
+  /** The group this layer belongs to (null = top level). */
+  parent: Layer | null = null;
+  /** Panel state: children hidden in the Layers panel. */
+  collapsed = false;
   private alphaCanvas: HTMLCanvasElement | null = null;
   private maskVer = 0;
   private alphaVer = -1;
   private alphaFull = false;
   constructor(public name: string, public canvas: HTMLCanvasElement) {}
   get ctx() { return ctxOf(this.canvas); }
+  get isGroup() { return this.kind === 'group'; }
+  /** Pixels can be painted on this layer (a group only exposes its mask). */
+  get paintable() { return !this.isGroup || this.maskMode; }
+  /** A group layer. Groups default to Pass Through, so they only affect compositing when opacity/mask/blend ask them to. */
+  static group(name: string) {
+    const g = new Layer(name, makeCanvas(1, 1));
+    g.kind = 'group'; g.blend = 'pass through';
+    return g;
+  }
   get maskMode() { return !!this.mask && (this.editMask || !!this.adjustment); }
   /** The canvas that editing tools should draw on. */
   get target() { return this.maskMode ? this.mask! : this.canvas; }
@@ -112,6 +129,15 @@ export function bakedCanvas(l: Layer): HTMLCanvasElement {
   return c;
 }
 
+/** The layer stack as a tree (children bottom→top). Layers whose parent isn't in `layers` become roots. */
+export interface LayerNode { layer: Layer; children: LayerNode[] }
+export function buildTree(layers: Layer[]): LayerNode[] {
+  const nodes = new Map<Layer, LayerNode>(), roots: LayerNode[] = [];
+  for (const l of layers) nodes.set(l, { layer: l, children: [] });
+  for (const l of layers) { const n = nodes.get(l)!, p = l.parent && nodes.get(l.parent); (p ? p.children : roots).push(n); }
+  return roots;
+}
+
 /** An in-progress brush stroke, composited at render time so stroke opacity behaves like Photoshop. */
 export interface Stroke { layer: Layer; canvas: HTMLCanvasElement; opacity: number; erase: boolean; onMask: boolean }
 
@@ -141,6 +167,8 @@ export class Doc {
   view: { zoom: number; panX: number; panY: number } | null = null;
   path: string | null = null;
   private subs = new Set<(k: ChangeKind) => void>();
+  /** Extra layers selected in the panel (Ctrl/Shift+click) for grouping; the active layer is always included. */
+  multi = new Set<Layer>();
   /** Shown to the user when an operation is refused (set by the app). */
   notice: (msg: string) => void = () => {};
   /** Messages produced while importing (e.g. unsupported PSD features). */
@@ -172,7 +200,8 @@ export class Doc {
 
   // ---- layer operations (all undoable) -------------------------------------
   addLayer(name?: string, canvas?: HTMLCanvasElement, at = this.layers.indexOf(this.active) + 1): Layer {
-    const l = new Layer(name ?? `Layer ${this.layers.length + 1}`, canvas ?? makeCanvas(this.width, this.height));
+    const l = new Layer(name ?? `Layer ${this.layers.filter((x) => !x.isGroup).length + 1}`, canvas ?? makeCanvas(this.width, this.height));
+    l.parent = this.active?.parent ?? null;
     const prev = this.active;
     this.layers.splice(at, 0, l);
     this.active = l;
@@ -186,8 +215,10 @@ export class Doc {
   }
 
   duplicateLayer(src = this.active) {
+    if (src.isGroup) return this.duplicateGroup(src);
     const at = this.layers.indexOf(src) + 1;
     const l = this.addLayer(`${src.name} copy`, cloneCanvas(src.canvas), at);
+    l.parent = src.parent;
     l.opacity = src.opacity; l.blend = src.blend; l.visible = src.visible;
     if (src.mask) { l.mask = cloneCanvas(src.mask); l.maskEnabled = src.maskEnabled; }
     if (src.text) l.text = { ...src.text };
@@ -196,26 +227,180 @@ export class Doc {
     return l;
   }
 
-  removeLayer(l = this.active) {
-    if (this.layers.length <= 1) return;
-    const at = this.layers.indexOf(l);
-    const prev = this.active;
-    this.layers.splice(at, 1);
-    this.active = this.layers[Math.min(at, this.layers.length - 1)];
-    const next = this.active;
-    this.history.push({
-      label: 'Delete Layer',
-      undo: () => { this.layers.splice(at, 0, l); this.active = prev; this.emit('structure'); },
-      redo: () => { this.layers.splice(this.layers.indexOf(l), 1); this.active = next; this.emit('structure'); },
-    });
+  // ---- groups ----------------------------------------------------------------
+  // Layout invariant: `layers` is bottom→top and a group sits directly AFTER all of its descendants, which
+  // form one contiguous block just before it. A layer's `parent` is the group it belongs to.
+  isDescendant(l: Layer, ancestor: Layer) { for (let p = l.parent; p; p = p.parent) if (p === ancestor) return true; return false; }
+  /** The layer plus (for a group) everything inside it, in stack order. */
+  blockOf(l: Layer): Layer[] { return l.isGroup ? [...this.layers.filter((e) => this.isDescendant(e, l)), l] : [l]; }
+  tree() { return buildTree(this.layers); }
+  /** Visible itself and inside no hidden group. */
+  isShown(l: Layer) { for (let p: Layer | null = l; p; p = p.parent) if (!p.visible) return false; return true; }
+  get leafCount() { return this.layers.filter((l) => !l.isGroup).length; }
+  /** Layers highlighted in the panel: the active layer plus any Ctrl/Shift-selected ones. */
+  selectedLayers(): Layer[] { return this.multi.size ? [...new Set([...this.multi, this.active])] : [this.active]; }
+  /** Notify and return false when the active item is a group without a mask (nothing to paint on). */
+  requirePaintable(): boolean {
+    if (this.active.paintable) return true;
+    this.notice('This is a group — select a layer inside it to paint (or edit its mask)');
+    return false;
+  }
+
+  private structSnap() { return { layers: this.layers.slice(), parents: this.layers.map((l) => l.parent), active: this.active }; }
+  private structApply(s: ReturnType<Doc['structSnap']>) {
+    this.layers = s.layers.slice();
+    s.layers.forEach((l, i) => (l.parent = s.parents[i]));
+    this.active = s.active; this.multi.clear();
+    this.emit('structure');
+  }
+  /** Run a stack-structure change (order / parents / membership) and make it undoable. */
+  private structEdit(label: string, fn: () => void) {
+    const before = this.structSnap();
+    fn();
+    const after = this.structSnap();
+    this.history.push({ label, undo: () => this.structApply(before), redo: () => this.structApply(after) });
     this.emit('structure');
   }
 
-  moveLayer(from: number, to: number) {
-    if (from === to || to < 0 || to >= this.layers.length) return;
-    const apply = (a: number, b: number) => { const [l] = this.layers.splice(a, 1); this.layers.splice(b, 0, l); this.emit('structure'); };
-    apply(from, to);
-    this.history.push({ label: 'Reorder Layer', undo: () => apply(to, from), redo: () => apply(from, to) });
+  /** Put the given layers (and everything inside any groups among them) into a new group. */
+  groupLayers(sel: Layer[] = this.selectedLayers()): Layer | null {
+    const picked = [...new Set(sel)];
+    const nodes = picked.filter((l) => !picked.some((o) => o !== l && this.isDescendant(l, o)));
+    if (!nodes.length) return null;
+    const parent = nodes[0].parent;
+    if (nodes.some((n) => n.parent !== parent)) { this.notice('Select layers that are in the same group'); return null; }
+    nodes.sort((a, b) => this.layers.indexOf(a) - this.layers.indexOf(b));
+    const g = Layer.group(`Group ${this.layers.filter((l) => l.isGroup).length + 1}`);
+    this.structEdit('Group Layers', () => {
+      const moved = nodes.flatMap((n) => this.blockOf(n)), set = new Set(moved), last = moved[moved.length - 1];
+      const out: Layer[] = [];
+      for (const e of this.layers) { if (set.has(e)) { if (e === last) out.push(...moved, g); } else out.push(e); }
+      for (const n of nodes) n.parent = g;
+      g.parent = parent;
+      this.layers = out; this.active = g; this.multi.clear();
+    });
+    return g;
+  }
+
+  /** An empty group just above the active layer. */
+  newGroup(): Layer {
+    const g = Layer.group(`Group ${this.layers.filter((l) => l.isGroup).length + 1}`);
+    this.structEdit('New Group', () => {
+      g.parent = this.active.parent;
+      this.layers.splice(this.layers.indexOf(this.active) + 1, 0, g);
+      this.active = g; this.multi.clear();
+    });
+    return g;
+  }
+
+  /** Dissolve a group: its contents move up one level, in place. (Group opacity/mask/blend are discarded.) */
+  ungroup(g = this.active) {
+    if (!g.isGroup) return;
+    this.structEdit('Ungroup Layers', () => {
+      const kids = this.layers.filter((e) => e.parent === g);
+      for (const k of kids) k.parent = g.parent;
+      this.layers = this.layers.filter((e) => e !== g);
+      this.active = kids.length ? kids[kids.length - 1] : (this.layers.filter((e) => !e.isGroup).pop() ?? this.layers[0]);
+      this.multi.clear();
+    });
+  }
+
+  /** Re-parent / re-order `n` (with its contents) relative to `target`. 'above'/'below' are in panel terms. */
+  moveNode(n: Layer, target: Layer, pos: 'above' | 'below' | 'inside'): boolean {
+    if (n === target || this.isDescendant(target, n) || (pos === 'inside' && !target.isGroup)) return false;
+    this.structEdit('Move Layer', () => {
+      const block = this.blockOf(n), set = new Set(block);
+      const rest = this.layers.filter((e) => !set.has(e));
+      let idx: number, parent: Layer | null;
+      if (pos === 'inside') { idx = rest.indexOf(target); parent = target; }               // top child: just before the group entry
+      else if (pos === 'above') { idx = rest.indexOf(target) + 1; parent = target.parent; } // a group's entry ends its block
+      else {
+        idx = rest.indexOf(target);
+        if (target.isGroup) while (idx > 0 && this.isDescendant(rest[idx - 1], target)) idx--;
+        parent = target.parent;
+      }
+      rest.splice(idx, 0, ...block);
+      n.parent = parent;
+      this.layers = rest;
+    });
+    return true;
+  }
+  /** Raise (+1) or lower (−1) among siblings; at the edge of a group it hops out of it. */
+  nudgeNode(n: Layer, dir: 1 | -1) {
+    const sibs = this.layers.filter((e) => e.parent === n.parent), i = sibs.indexOf(n);
+    const other = sibs[i + dir];
+    if (other) this.moveNode(n, other, dir === 1 ? 'above' : 'below');
+    else if (n.parent) this.moveNode(n, n.parent, dir === 1 ? 'above' : 'below');
+  }
+
+  duplicateGroup(g: Layer): Layer {
+    const block = this.blockOf(g), map = new Map<Layer, Layer>();
+    for (const e of block) {
+      const c = e.isGroup ? Layer.group(e.name) : new Layer(e.name, cloneCanvas(e.canvas));
+      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed;
+      if (e.mask) { c.mask = cloneCanvas(e.mask); c.maskEnabled = e.maskEnabled; }
+      if (e.text) c.text = { ...e.text };
+      if (e.adjustment) c.adjustment = cloneAdjustment(e.adjustment);
+      map.set(e, c);
+    }
+    for (const e of block) map.get(e)!.parent = e === g ? g.parent : map.get(e.parent!) ?? g.parent;
+    const copy = map.get(g)!;
+    copy.name = `${g.name} copy`;
+    this.structEdit('Duplicate Group', () => {
+      this.layers.splice(this.layers.indexOf(g) + 1, 0, ...block.map((e) => map.get(e)!));
+      this.active = copy; this.multi.clear();
+    });
+    return copy;
+  }
+
+  /** Flatten a group into a single pixel layer (hidden layers inside are discarded). */
+  mergeGroup(g = this.active) {
+    if (!g.isGroup) return;
+    const inside = this.layers.filter((e) => this.isDescendant(e, g));
+    this.structEdit('Merge Group', () => {
+      const c = makeCanvas(this.width, this.height);
+      composite({ width: this.width, height: this.height, layers: inside, stroke: null, selMask: null } as unknown as Doc, ctxOf(c));
+      if (g.mask && g.maskEnabled) { const x = ctxOf(c); x.globalCompositeOperation = 'destination-in'; x.drawImage(g.maskAlpha(), 0, 0); x.globalCompositeOperation = 'source-over'; }
+      const m = new Layer(g.name, c);
+      m.opacity = g.opacity; m.visible = g.visible; m.blend = g.blend === 'pass through' ? 'normal' : g.blend; m.parent = g.parent;
+      const drop = new Set(inside);
+      this.layers = this.layers.filter((e) => !drop.has(e)).map((e) => (e === g ? m : e));
+      this.active = m; this.multi.clear();
+    });
+  }
+
+  removeLayer(l = this.active) {
+    const block = this.blockOf(l), set = new Set(block);
+    if (!this.layers.some((e) => !e.isGroup && !set.has(e))) return;      // always keep at least one real layer
+    this.structEdit(l.isGroup ? 'Delete Group' : 'Delete Layer', () => {
+      const at = this.layers.indexOf(block[0]);
+      this.layers = this.layers.filter((e) => !set.has(e));
+      this.active = this.layers[Math.min(at, this.layers.length - 1)];
+      this.multi.clear();
+    });
+  }
+
+  /** Structural self-check used by tests: returns a list of problems (empty = healthy). */
+  validate(): string[] {
+    const bad: string[] = [], at = new Map(this.layers.map((l, i) => [l, i] as const));
+    if (!this.layers.some((l) => !l.isGroup)) bad.push('no real layers');
+    if (!at.has(this.active)) bad.push('active layer is not in the stack');
+    for (const l of this.layers) {
+      if (l.parent && (!at.has(l.parent) || !l.parent.isGroup)) bad.push(`${l.name}: parent missing or not a group`);
+      for (let p = l.parent, n = 0; p; p = p.parent) if (p === l || ++n > 99) { bad.push(`${l.name}: parent cycle`); break; }
+    }
+    for (const g of this.layers.filter((l) => l.isGroup)) {
+      const idx = at.get(g)!, inside = this.layers.filter((e) => this.isDescendant(e, g)).map((e) => at.get(e)!).sort((a, b) => a - b);
+      if (inside.some((i) => i > idx)) bad.push(`${g.name}: has contents above its own entry`);
+      if (inside.length && inside[inside.length - 1] - inside[0] !== inside.length - 1) bad.push(`${g.name}: contents not contiguous`);
+      if (inside.length && inside[inside.length - 1] !== idx - 1) bad.push(`${g.name}: contents don't end right below the group`);
+    }
+    return bad;
+  }
+  /** Compact structural fingerprint ("[A B [C D]g1]") for comparing stack shapes in tests. */
+  signature(): string {
+    const f = (ns: LayerNode[]): string => ns.map((n) => (n.layer.isGroup ? `[${n.layer.name}:${f(n.children)}]` : n.layer.name)).join(',');
+    return f(this.tree());
   }
 
   /** Run `fn` on a layer and record before/after states for undo. */
@@ -237,6 +422,7 @@ export class Doc {
     const m = makeCanvas(this.width, this.height), x = ctxOf(m);
     x.fillStyle = '#fff'; x.fillRect(0, 0, m.width, m.height);
     l.mask = m; l.editMask = true;
+    l.parent = this.active.parent;
     const at = this.layers.indexOf(this.active) + 1, prev = this.active;
     this.layers.splice(at, 0, l);
     this.active = l;
@@ -260,9 +446,12 @@ export class Doc {
   }
 
   mergeDown(l = this.active) {
+    if (l.isGroup) return this.mergeGroup(l);
     const i = this.layers.indexOf(l);
     if (i <= 0) return;
     const below = this.layers[i - 1];
+    if (below.parent !== l.parent) { this.notice('Nothing below this layer in its group to merge into'); return; }
+    if (below.isGroup) { this.notice('Cannot merge into a group — use Merge Group'); return; }
     if (below.adjustment) { this.notice('Cannot merge into an adjustment layer'); return; }
     const belowBefore = captureLayer(below);
     const prevActive = this.active;
@@ -394,9 +583,7 @@ export class Doc {
   transformAll(label: string, nw: number, nh: number, draw: (ctx: CanvasRenderingContext2D, src: HTMLCanvasElement) => void) {
     const before = this.capture();
     for (const l of this.layers) {
-      const c = makeCanvas(nw, nh);
-      draw(ctxOf(c), l.canvas);
-      l.canvas = c;
+      if (!l.isGroup) { const c = makeCanvas(nw, nh); draw(ctxOf(c), l.canvas); l.canvas = c; }
       if (l.mask) { const m = makeCanvas(nw, nh); draw(ctxOf(m), l.mask); l.mask = m; l.touchMask(); }
       l.text = null;
     }

@@ -5,6 +5,7 @@ import { clipToSelection } from './selection';
 
 /** Apply a CSS-filter-string based adjustment to the active layer (within the selection, if any). */
 export function applyFilter(label: string, filter: string) {
+  if (!app.doc.requirePaintable()) return;
   const doc = app.doc, layer = doc.active;
   const before = cloneCanvas(layer.target);
   const w = layer.target.width, h = layer.target.height;
@@ -31,6 +32,7 @@ export function applyFilter(label: string, filter: string) {
 }
 
 export function clearSelection() {
+  if (!app.doc.requirePaintable()) return;
   const doc = app.doc, layer = doc.active;
   const w = layer.target.width, h = layer.target.height;
   const r = (doc.selection && clampRect(doc.selection, w, h)) || { x: 0, y: 0, w, h };
@@ -42,6 +44,7 @@ export function clearSelection() {
 }
 
 export function fillSelection(color: string) {
+  if (!app.doc.requirePaintable()) return;
   const doc = app.doc, layer = doc.active;
   const w = layer.target.width, h = layer.target.height;
   const r = (doc.selection && clampRect(doc.selection, w, h)) || { x: 0, y: 0, w, h };

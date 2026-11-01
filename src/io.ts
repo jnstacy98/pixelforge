@@ -64,22 +64,33 @@ async function importRaster(data: ArrayBuffer, name: string, ext: string): Promi
 function importPsd(data: ArrayBuffer, name: string): Doc {
   const psd = readPsd(data, { skipThumbnail: true, skipLayerImageData: false });
   const doc = new Doc(psd.width, psd.height, name);
-  const walk = (children: PsdLayer[], hidden: boolean, opacity: number) => {
+  /** Expand a PSD mask rectangle to a document-sized grayscale mask (filled with the mask's default colour). */
+  const importMask = (c: PsdLayer, l: Layer) => {
+    if (!c.mask?.canvas) return;
+    const m = makeCanvas(psd.width, psd.height), mx = ctxOf(m), dc = c.mask.defaultColor ?? 0;
+    mx.fillStyle = `rgb(${dc},${dc},${dc})`; mx.fillRect(0, 0, m.width, m.height);
+    const rel = c.mask.positionRelativeToLayer ? (c.left ?? 0) : 0, relY = c.mask.positionRelativeToLayer ? (c.top ?? 0) : 0;
+    mx.drawImage(c.mask.canvas, (c.mask.left ?? 0) + rel, (c.mask.top ?? 0) + relY);
+    l.mask = m; l.maskEnabled = !c.mask.disabled;
+  };
+  const walk = (children: PsdLayer[], parent: Layer | null) => {
     for (const c of children) {
-      if (c.children) { walk(c.children, hidden || !!c.hidden, opacity * (c.opacity ?? 1)); continue; }
+      if (c.children) {
+        // A group: its contents go first, then the group entry itself (groups follow their children in the stack).
+        const g = Layer.group(c.name || 'Group');
+        g.parent = parent; g.visible = !c.hidden; g.opacity = c.opacity ?? 1; g.collapsed = c.opened === false;
+        const bm = c.blendMode as string | undefined;
+        g.blend = !bm || bm === 'pass through' ? 'pass through' : bm;
+        importMask(c, g);
+        walk(c.children, g);
+        doc.layers.push(g);
+        continue;
+      }
       const canvas = makeCanvas(psd.width, psd.height);
       if (c.canvas) ctxOf(canvas).drawImage(c.canvas, c.left ?? 0, c.top ?? 0);
       const l = new Layer(c.name || 'Layer', canvas);
-      l.visible = !(hidden || c.hidden);
-      l.opacity = (c.opacity ?? 1) * opacity;
-      if (c.mask?.canvas) {
-        // PSD masks are grayscale rects; expand to a document-sized mask filled with the mask's default color.
-        const m = makeCanvas(psd.width, psd.height), mx = ctxOf(m), dc = c.mask.defaultColor ?? 0;
-        mx.fillStyle = `rgb(${dc},${dc},${dc})`; mx.fillRect(0, 0, m.width, m.height);
-        const rel = c.mask.positionRelativeToLayer ? (c.left ?? 0) : 0, relY = c.mask.positionRelativeToLayer ? (c.top ?? 0) : 0;
-        mx.drawImage(c.mask.canvas, (c.mask.left ?? 0) + rel, (c.mask.top ?? 0) + relY);
-        l.mask = m; l.maskEnabled = !c.mask.disabled;
-      }
+      l.parent = parent; l.visible = !c.hidden; l.opacity = c.opacity ?? 1;
+      importMask(c, l);
       if (c.adjustment) {
         const a = fromPsdAdjustment(c.adjustment);
         if (a) {
@@ -91,17 +102,17 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
           doc.notes.push(`"${c.name}" is a ${c.adjustment.type} adjustment layer, which PixelForge can't render yet — kept as a hidden placeholder`);
         }
       }
-      l.blend = (c.blendMode as string) && (c.blendMode as string) !== 'pass through' ? (c.blendMode as string) : 'normal';
+      if (!c.adjustment) l.blend = (c.blendMode as string) && (c.blendMode as string) !== 'pass through' ? (c.blendMode as string) : 'normal';
       doc.layers.push(l);
     }
   };
-  if (psd.children?.length) walk(psd.children, false, 1);
-  if (!doc.layers.length) {
+  if (psd.children?.length) walk(psd.children, null);
+  if (!doc.layers.some((l) => !l.isGroup)) {
     const l = new Layer('Background', makeCanvas(psd.width, psd.height));
     if (psd.canvas) l.ctx.drawImage(psd.canvas, 0, 0);
-    doc.layers.push(l);
+    doc.layers.unshift(l);
   }
-  doc.active = doc.layers[doc.layers.length - 1];
+  doc.active = [...doc.layers].reverse().find((l) => !l.isGroup)!;
   return doc;
 }
 
@@ -111,12 +122,15 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
     const psd: Psd = {
       width: doc.width, height: doc.height,
       canvas: flatten(doc),
-      children: doc.layers.map((l) => ({
-        name: l.name, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible,
-        ...(l.adjustment ? { adjustment: toPsdAdjustment(l.adjustment) } : { canvas: l.canvas }),
-        blendMode: l.blend as PsdLayer['blendMode'],
-        mask: l.mask ? { canvas: l.mask, left: 0, top: 0, right: doc.width, bottom: doc.height, defaultColor: 0, disabled: !l.maskEnabled } : undefined,
-      })),
+      children: doc.tree().map(function toPsd(n): PsdLayer {
+        const l = n.layer;
+        return {
+          name: l.name, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible,
+          ...(l.isGroup ? { children: n.children.map(toPsd), opened: !l.collapsed } : l.adjustment ? { adjustment: toPsdAdjustment(l.adjustment) } : { canvas: l.canvas }),
+          blendMode: l.blend as PsdLayer['blendMode'],
+          mask: l.mask ? { canvas: l.mask, left: 0, top: 0, right: doc.width, bottom: doc.height, defaultColor: 0, disabled: !l.maskEnabled } : undefined,
+        };
+      }),
     };
     return new Uint8Array(writePsd(psd, { generateThumbnail: true }));
   }

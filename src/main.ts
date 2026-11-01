@@ -138,7 +138,12 @@ const menus: { title: string; items: () => Item[] }[] = [
   { title: 'Layer', items: () => [
     { label: 'New Layer', shortcut: 'Ctrl+Shift+N', action: () => app.doc.addLayer() },
     { label: 'Duplicate Layer', shortcut: 'Ctrl+J', action: () => app.doc.duplicateLayer() },
-    { label: 'Delete Layer', action: () => app.doc.removeLayer() },
+    { label: app.doc.active.isGroup ? 'Delete Group' : 'Delete Layer', action: () => app.doc.removeLayer() },
+    '-',
+    { label: 'New Group', action: () => app.doc.newGroup() },
+    { label: 'Group Layers', shortcut: 'Ctrl+G', action: () => app.doc.groupLayers() },
+    { label: 'Ungroup Layers', shortcut: 'Ctrl+Shift+G', action: () => app.doc.ungroup(app.doc.active.isGroup ? app.doc.active : app.doc.active.parent ?? app.doc.active) },
+    ...(app.doc.active.isGroup ? [{ label: 'Merge Group', action: () => app.doc.mergeGroup() }] : []),
     '-',
     { label: 'New Adjustment Layer — Levels…', action: () => newAdjustmentLayer('levels') },
     { label: 'New Adjustment Layer — Curves…', action: () => newAdjustmentLayer('curves') },
@@ -224,6 +229,7 @@ window.addEventListener('keydown', (e) => {
       s: () => exportAs(e.shiftKey ? 'png' : 'psd'),
       w: () => closeDoc(app.docs.indexOf(doc)),
       j: () => doc.duplicateLayer(),
+      g: () => (e.shiftKey ? doc.ungroup(doc.active.isGroup ? doc.active : doc.active.parent ?? doc.active) : doc.groupLayers()),
       e: () => doc.mergeDown(),
       a: () => doc.setSelection({ x: 0, y: 0, w: doc.width, h: doc.height }),
       d: () => doc.selection && doc.setSelection(null),
@@ -309,3 +315,11 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
 };
 (window as any).__defaultAdj = defaultAdjustment;
 (window as any).__composite = (d: Doc, ctx: CanvasRenderingContext2D) => composite(d, ctx);
+(window as any).__groupRoundtrip = async (pts: [number, number][]) => {
+  const { encode, importFile } = await import('./io');
+  const sample = (d: Doc) => { const c = document.createElement('canvas'); c.width = d.width; c.height = d.height; const x = c.getContext('2d', { willReadFrequently: true })!; composite(d, x); return pts.map(([a, b]) => Array.from(x.getImageData(a, b, 1, 1).data)); };
+  const data = await encode(app.doc, 'psd');
+  const d2 = await importFile({ name: 'g.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
+  const info = (d: Doc) => d.layers.filter((l) => l.isGroup).map((l) => ({ name: l.name, opacity: Math.round(l.opacity * 100) / 100, blend: l.blend, visible: l.visible, hasMask: !!l.mask, collapsed: l.collapsed, parent: l.parent?.name ?? null }));
+  return { before: sample(app.doc), after: sample(d2), sigBefore: app.doc.signature(), sigAfter: d2.signature(), groupsBefore: info(app.doc), groupsAfter: info(d2), problems: d2.validate() };
+};

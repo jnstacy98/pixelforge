@@ -172,7 +172,7 @@ function openAdjust(title: string, label: string, sess: Sess, build: (preview: (
 }
 
 // ---------------------------------------------------------------- Levels
-export const openLevels = () => levelsDialog(new PixelSession(), null);
+export const openLevels = () => { if (app.doc.requirePaintable()) levelsDialog(new PixelSession(), null); };
 function levelsDialog(s: Sess, init: A.AdjustmentData | null) {
   openAdjust('Levels', 'Levels', s, (preview) => {
     const P: Record<A.Channel, A.LevelsParams> = init?.type === 'levels' ? (A.cloneAdjustment(init) as typeof init).P : { rgb: A.identityLevels(), r: A.identityLevels(), g: A.identityLevels(), b: A.identityLevels() };
@@ -263,7 +263,7 @@ const PRESETS: [string, A.CurvePoint[]][] = [
   ['Invert', [{ x: 0, y: 255 }, { x: 255, y: 0 }]],
 ];
 
-export const openCurves = () => curvesDialog(new PixelSession(), null);
+export const openCurves = () => { if (app.doc.requirePaintable()) curvesDialog(new PixelSession(), null); };
 function curvesDialog(s: Sess, init: A.AdjustmentData | null) {
   openAdjust('Curves', 'Curves', s, (preview) => {
     const P: Record<A.Channel, A.CurvePoint[]> = init?.type === 'curves' ? (A.cloneAdjustment(init) as typeof init).P : { rgb: A.identityCurve(), r: A.identityCurve(), g: A.identityCurve(), b: A.identityCurve() };
@@ -340,7 +340,7 @@ function curvesDialog(s: Sess, init: A.AdjustmentData | null) {
 
 // ---------------------------------------------------------------- Auto Levels (no dialog)
 export function autoLevels() {
-  if (busy) return;
+  if (busy || !app.doc.requirePaintable()) return;
   const s = new PixelSession();
   const t = (['r', 'g', 'b'] as A.Channel[]).map((c) => {
     const { ib, iw } = A.autoPoints(s.hist(c));

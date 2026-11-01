@@ -586,6 +586,203 @@ await drag([30, 30], [31, 30]); await wait();
 assert.match(await page.evaluate(() => document.getElementById('toast').textContent), /no clean area/i); assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), hbefore); ok('spot healing with no usable area warns and changes nothing');
 await page.evaluate(() => window.__app.setTool('move'));
 
+
+// 6h. layer groups
+const G = {
+  sig: () => page.evaluate(() => window.__app.doc.signature()),
+  bad: () => page.evaluate(() => window.__app.doc.validate()),
+  byName: (n) => `window.__app.doc.layers.find((l) => l.name === ${JSON.stringify(n)})`,
+};
+const gx = (expr) => page.evaluate(`(() => { const d = window.__app.doc; ${expr} })()`);
+const cpx = async (x, y) => { await page.waitForTimeout(160); return (await px(x, y)).slice(0, 3); };
+const near = (a, b, tol = 2) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
+const rows = () => page.locator('#layerlist .layer').count();
+
+await page.evaluate(() => {
+  window.__blank(400, 300); const a = window.__app, d = a.doc;
+  d.layers[0].name = 'Base';
+  const A = d.addLayer('A'); A.ctx.fillStyle = '#e02020'; A.ctx.fillRect(50, 50, 100, 100);
+  const B = d.addLayer('B'); B.ctx.fillStyle = '#2040e0'; B.ctx.fillRect(100, 100, 100, 100);
+  d.emit('structure'); a.setTool('move');
+});
+await wait();
+assert.equal(await G.sig(), 'Base,A,B'); assert.equal(await rows(), 3);
+
+// group via the panel: click A, Ctrl+click B, Ctrl+G
+const idOf = (n) => gx(`return ${G.byName(n)}.id`);
+await page.click(`#layerlist .layer[data-layer="${await idOf('A')}"] .name`);
+await page.click(`#layerlist .layer[data-layer="${await idOf('B')}"] .name`, { modifiers: ['Control'] });
+await page.keyboard.press('Control+g'); await wait();
+assert.equal(await G.sig(), 'Base,[Group 1:A,B]'); assert.deepEqual(await G.bad(), []); ok('Ctrl+click two layers then Ctrl+G groups them');
+assert.equal(await page.locator('#layerlist .layer.isgroup').count(), 1); assert.equal(await rows(), 4); ok('the panel shows the group with its indented children');
+assert.ok(near(await cpx(60, 60), [224, 32, 32]) && near(await cpx(120, 120), [32, 64, 224]) && near(await cpx(300, 250), [255, 255, 255])); ok('a new Pass Through group does not change the image');
+assert.equal(await gx(`return d.active.blend`), 'pass through'); ok('groups default to Pass Through');
+
+// group opacity composites the group as a unit (A hidden under B stays hidden)
+await gx(`d.setProp(d.active, 'opacity', 0.5)`);
+assert.ok(near(await cpx(60, 60), [239, 143, 143], 3)); assert.ok(near(await cpx(120, 120), [143, 159, 239], 3)); ok('group opacity applies to the flattened group (overlap shows B only, not A through B)');
+await gx(`d.setProp(d.active, 'opacity', 1)`);
+await gx(`d.setProp(d.active, 'visible', false)`);
+assert.ok(near(await cpx(60, 60), [255, 255, 255]) && near(await cpx(120, 120), [255, 255, 255])); ok('hiding a group hides everything inside');
+await gx(`d.setProp(d.active, 'visible', true)`);
+
+// group blend mode (multiply over mid-gray base)
+await gx(`const b = d.layers[0]; b.ctx.fillStyle = '#808080'; b.ctx.fillRect(0, 0, 400, 300); d.emit('structure')`);
+await gx(`d.setProp(d.active, 'blend', 'multiply')`);
+assert.ok(near(await cpx(60, 60), [112, 16, 16], 3)); ok('group blend mode (Multiply) is applied to the group as a whole');
+await gx(`d.setProp(d.active, 'blend', 'pass through')`);
+
+// group mask
+await gx(`d.addMask('reveal'); const m = d.active.mask.getContext('2d'); m.fillStyle = '#000'; m.fillRect(0, 0, 100, 300); d.active.touchMask(); d.emit('structure')`);
+assert.ok(near(await cpx(60, 60), [128, 128, 128]) && near(await cpx(120, 120), [32, 64, 224])); ok('a group mask hides the whole group where it is black');
+// paint on the group mask with the brush
+await page.evaluate(() => { const a = window.__app; a.setFg('#000000'); a.brush.size = 30; a.brush.hardness = 1; a.brush.opacity = 1; a.brush.flow = 1; a.setTool('brush'); });
+assert.equal(await gx(`return d.active.maskMode`), true);
+await drag([110, 120], [130, 120]); await wait();
+assert.ok(near(await cpx(120, 120), [128, 128, 128])); ok('brushing on a selected group paints its mask');
+await page.keyboard.press('Control+z'); await wait();
+await gx(`d.deleteMask()`); await wait();
+assert.equal(await gx(`return !!d.active.mask`), false);
+
+// a group without a mask cannot be painted on
+await gx(`d.newGroup(); return 1`);
+const baseBefore = await gx(`return Array.from(d.layers[0].ctx.getImageData(10,10,1,1).data)`);
+await drag([200, 200], [260, 200]); await wait();
+assert.match(await page.evaluate(() => document.getElementById('toast').textContent), /group/i); assert.deepEqual(await gx(`return Array.from(d.layers[0].ctx.getImageData(10,10,1,1).data)`), baseBefore); ok('painting on a group with no mask is refused with a hint');
+await page.keyboard.press('Control+z'); await wait();                        // undo New Group
+assert.equal(await G.sig(), 'Base,[Group 1:A,B]');
+
+// adjustment inside a group: Pass Through affects everything below, an isolated (Normal) group only its own content
+await gx(`const c = d.addLayer('C'); c.parent = null; c.ctx.fillStyle = '#20c040'; c.ctx.fillRect(250, 50, 100, 100); d.emit('structure')`);
+await gx(`d.select(${G.byName('C')}); d.addAdjustmentLayer(window.__defaultAdj('invert'), 'Inv'); d.groupLayers([${G.byName('C')}, ${G.byName('Inv')}]); return 1`);
+assert.equal(await G.sig(), 'Base,[Group 1:A,B],[Group 2:C,Inv]'); assert.deepEqual(await G.bad(), []);
+assert.ok(near(await cpx(10, 250), [127, 127, 127])); assert.ok(near(await cpx(300, 100), [223, 63, 191])); ok('an adjustment in a Pass Through group affects layers outside the group');
+await gx(`d.setProp(d.active, 'blend', 'normal')`);
+assert.ok(near(await cpx(10, 250), [128, 128, 128])); assert.ok(near(await cpx(300, 100), [223, 63, 191])); ok('…but only the group\'s own contents once the group is isolated (Normal)');
+await gx(`d.setProp(d.active, 'blend', 'pass through')`);
+await gx(`d.removeLayer(d.active); return 1`); await wait();
+assert.equal(await G.sig(), 'Base,[Group 1:A,B]');
+
+// drag & drop in the panel: drop a layer onto a group's middle -> moves inside
+await gx(`const e = d.addLayer('E'); e.ctx.fillStyle = '#ffd000'; e.ctx.fillRect(300, 200, 60, 60); d.emit('structure'); return 1`);
+assert.equal(await G.sig(), 'Base,[Group 1:A,B],E');
+await page.locator(`#layerlist .layer[data-layer="${await idOf('E')}"]`).dragTo(page.locator(`#layerlist .layer.isgroup`), { targetPosition: { x: 120, y: 18 } });
+await wait();
+assert.equal(await G.sig(), 'Base,[Group 1:A,B,E]'); assert.deepEqual(await G.bad(), []); ok('dragging a layer onto a group in the panel moves it inside');
+await page.locator(`#layerlist .layer[data-layer="${await idOf('E')}"]`).dragTo(page.locator(`#layerlist .layer[data-layer="${await idOf('Base')}"]`), { targetPosition: { x: 120, y: 30 } });
+await wait();
+assert.equal(await G.sig(), 'E,Base,[Group 1:A,B]'); ok('dragging below the bottom layer reorders to the bottom (and out of the group)');
+await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z'); await wait();
+assert.equal(await G.sig(), 'Base,[Group 1:A,B],E'); ok('undo reverses both panel moves');
+await gx(`d.moveNode(${G.byName('E')}, ${G.byName('Group 1')}, 'inside')`); await wait();
+// a group cannot be moved into itself
+assert.equal(await gx(`return d.moveNode(${G.byName('Group 1')}, ${G.byName('A')}, 'above')`), false); ok('moving a group into its own contents is refused');
+
+// collapse / expand
+await page.locator('#layerlist .layer.isgroup .arrow').click(); await wait();
+assert.equal(await rows(), 2); await page.locator('#layerlist .layer.isgroup .arrow').click(); await wait(); assert.equal(await rows(), 5); ok('collapse arrow hides and shows a group\'s rows');
+
+// new layers land inside the active layer's group
+await gx(`d.select(${G.byName('A')}); const n = d.addLayer('N'); return n.parent && n.parent.name`).then((p) => assert.equal(p, 'Group 1')); ok('a new layer is created inside the active layer\'s group');
+await gx(`d.removeLayer(${G.byName('N')}); return 1`);
+
+// move tool on a group moves everything inside
+await gx(`d.select(${G.byName('Group 1')}); return 1`);
+await page.evaluate(() => window.__app.setTool('move'));
+const mb = await gx(`return [Array.from(${G.byName('A')}.ctx.getImageData(60,60,1,1).data), Array.from(${G.byName('B')}.ctx.getImageData(110,110,1,1).data)]`);
+await drag([75, 75], [135, 105]); await wait();
+const ma = await gx(`return [Array.from(${G.byName('A')}.ctx.getImageData(120,90,1,1).data), Array.from(${G.byName('B')}.ctx.getImageData(170,140,1,1).data), Array.from(${G.byName('A')}.ctx.getImageData(60,60,1,1).data)]`);
+assert.deepEqual(ma[0].slice(0, 3), mb[0].slice(0, 3)); assert.deepEqual(ma[1].slice(0, 3), mb[1].slice(0, 3)); assert.equal(ma[2][3], 0); ok('the Move tool on a group moves every layer inside it');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual(await gx(`return Array.from(${G.byName('A')}.ctx.getImageData(60,60,1,1).data).slice(0,3)`), mb[0].slice(0, 3)); ok('undo moves the group contents back');
+
+// duplicate / merge / ungroup / delete — with undo
+const before = await cpx(120, 120);
+await gx(`d.select(${G.byName('Group 1')}); d.duplicateLayer(); return 1`);
+assert.equal(await G.sig(), 'Base,[Group 1:A,B,E],[Group 1 copy:A,B,E]'); assert.deepEqual(await G.bad(), []); ok('duplicating a group copies its whole contents');
+await page.keyboard.press('Control+z'); await wait();
+await gx(`d.select(${G.byName('Group 1')}); d.mergeGroup(); return 1`); await wait();
+assert.equal(await G.sig(), 'Base,Group 1'); assert.deepEqual(near(await cpx(120, 120), before, 2), true); ok('Merge Group flattens it into one layer without changing the image');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await G.sig(), 'Base,[Group 1:A,B,E]'); ok('undo Merge Group restores the group');
+await page.keyboard.press('Control+Shift+g'); await wait();
+assert.equal(await G.sig(), 'Base,A,B,E'); assert.deepEqual(await G.bad(), []); ok('Ctrl+Shift+G ungroups');
+await page.keyboard.press('Control+z'); await wait();
+await gx(`d.removeLayer(${G.byName('Group 1')}); return 1`); await wait();
+assert.equal(await G.sig(), 'Base'); ok('deleting a group deletes its contents');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await G.sig(), 'Base,[Group 1:A,B,E]'); assert.deepEqual(await G.bad(), []); ok('undo delete group brings the group and its layers back');
+assert.equal(await gx(`d.removeLayer(d.layers[0]); const n = d.leafCount; return n`) >= 1, true);
+await page.keyboard.press('Control+z'); await wait();
+
+// flatten renders groups
+await gx(`d.flatten(); return 1`); await wait();
+assert.equal(await G.sig(), 'Background'); assert.ok(near(await cpx(120, 120), before, 2)); ok('Flatten Image renders groups into one layer');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await G.sig(), 'Base,[Group 1:A,B,E]'); ok('undo flatten restores the groups');
+
+// PSD round-trip with nested groups, masks, blend modes, hidden and collapsed state
+await page.evaluate(() => {
+  window.__blank(400, 300); const a = window.__app, d = a.doc;
+  d.layers[0].name = 'Base'; d.layers[0].ctx.fillStyle = '#c8c8c8'; d.layers[0].ctx.fillRect(0, 0, 400, 300);
+  const mk = (n, col, x, y) => { const l = d.addLayer(n); l.ctx.fillStyle = col; l.ctx.fillRect(x, y, 90, 90); return l; };
+  const X = mk('X', '#e02020', 30, 30), Y = mk('Y', '#2040e0', 90, 90), Z = mk('Z', '#20c040', 250, 40);
+  const inner = d.groupLayers([Y, Z]); inner.name = 'Inner'; inner.opacity = 0.7;
+  const outer = d.groupLayers([X, inner]); outer.name = 'Outer'; outer.opacity = 0.8; outer.blend = 'multiply'; outer.collapsed = true;
+  d.select(outer); d.addMask('reveal'); const mx = outer.mask.getContext('2d'); mx.fillStyle = '#000'; mx.fillRect(0, 0, 60, 300); outer.touchMask();
+  const hid = mk('Hid', '#000000', 300, 200); hid.visible = false; d.emit('structure');
+});
+await wait();
+const pts = [[10, 10], [45, 45], [100, 100], [130, 130], [280, 70], [330, 230]];
+const gr = await page.evaluate((pts) => window.__groupRoundtrip(pts), pts);
+assert.equal(gr.sigAfter, gr.sigBefore); assert.deepEqual(gr.problems, []); ok(`PSD round-trip keeps nested group structure (${gr.sigAfter})`);
+assert.deepEqual(gr.groupsAfter, gr.groupsBefore); ok('…with each group\'s opacity, blend mode, visibility, mask and open/collapsed state');
+for (let i = 0; i < pts.length; i++) assert.ok(near(gr.after[i], gr.before[i], 2), `pixel ${pts[i]}: ${gr.before[i]} vs ${gr.after[i]}`);
+ok('…and the composite image is identical after re-import');
+
+// randomized stress test: invariants hold after every operation, and undo/redo walk the exact same structures
+const stress = await page.evaluate(() => {
+  const total = { problems: [], undoBad: 0, steps: 0, origOK: true, redoOK: true, groups: 0, ops: 0 };
+  for (const seed0 of [12345, 777, 20240601]) {
+    window.__blank(80, 60); const a = window.__app, d = a.doc;
+    d.layers[0].name = 'L0';
+    for (let i = 1; i < 6; i++) { const l = d.addLayer('L' + i); l.ctx.fillStyle = `hsl(${i * 55},70%,50%)`; l.ctx.fillRect(i * 8, i * 5, 20, 20); }
+    let seed = seed0; const rnd = () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+    const start = d.history.depth, sigs = { [start]: d.signature() };
+    for (let i = 0; i < 85; i++) {                        // 85 ops + 6 setup steps stay under the 100-step history cap
+      const all = d.layers, groups = all.filter((l) => l.isGroup), kind = pick(['group', 'group', 'ungroup', 'move', 'move', 'move', 'delete', 'dup', 'newgroup', 'addlayer', 'merge']);
+      d.select(pick(all));
+      try {
+        if (kind === 'group') { const k = 1 + Math.floor(rnd() * 3), sel = [pick(all)]; for (let j = 1; j < k; j++) sel.push(pick(all.filter((l) => l.parent === sel[0].parent))); d.groupLayers(sel); }
+        else if (kind === 'ungroup' && groups.length) d.ungroup(pick(groups));
+        else if (kind === 'move') d.moveNode(pick(all), pick(all), pick(['above', 'below', 'inside']));
+        else if (kind === 'delete') d.removeLayer(pick(all));
+        else if (kind === 'dup') d.duplicateLayer(pick(all));
+        else if (kind === 'newgroup') d.newGroup();
+        else if (kind === 'addlayer') d.addLayer('N' + i);
+        else if (kind === 'merge') { const g = groups.length ? pick(groups) : null; if (g && rnd() < 0.5) d.mergeGroup(g); else d.mergeDown(pick(all)); }
+      } catch (e) { total.problems.push(`seed ${seed0} op ${i} ${kind} threw ${e}`); }
+      const v = d.validate(); if (v.length) total.problems.push(`seed ${seed0} after op ${i} (${kind}): ${v.join('; ')}`);
+      sigs[d.history.depth] = d.signature(); total.ops++;
+    }
+    const end = d.history.depth, finalSig = d.signature();
+    while (d.history.depth > start) {                    // undo everything: each step must land on the structure recorded at that depth
+      d.history.undo(); const dep = d.history.depth, v = d.validate();
+      if (v.length) total.problems.push(`seed ${seed0} undo to ${dep}: ${v.join('; ')}`);
+      if (d.signature() !== sigs[dep]) total.undoBad++;
+    }
+    if (d.signature() !== sigs[start]) total.origOK = false;
+    while (d.history.depth < end) { d.history.redo(); const v = d.validate(); if (v.length) total.problems.push(`seed ${seed0} redo: ${v.join('; ')}`); }
+    if (d.signature() !== finalSig) total.redoOK = false;
+    total.steps += end - start; total.groups += d.layers.filter((l) => l.isGroup).length;
+  }
+  return total;
+});
+assert.deepEqual(stress.problems, []); ok(`stress: ${stress.ops} random group/ungroup/move/delete/duplicate/merge operations across 3 seeds kept the stack valid (${stress.steps} undoable steps)`);
+assert.equal(stress.undoBad, 0); assert.equal(stress.origOK, true); ok('stress: undoing every step restored exactly the structure recorded before it');
+assert.equal(stress.redoOK, true); ok('stress: redoing everything reproduces the final structure');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

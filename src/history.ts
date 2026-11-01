@@ -13,6 +13,8 @@ export class History {
     this.dirty = true;
     this.onChange();
   }
+  /** Number of undoable steps currently applied (used by tests). */
+  get depth() { return this.idx; }
   get canUndo() { return this.idx > 0; }
   get canRedo() { return this.idx < this.stack.length; }
   get undoLabel() { return this.canUndo ? this.stack[this.idx - 1].label : ''; }

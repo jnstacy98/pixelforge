@@ -2,12 +2,13 @@
 
 A Photoshop-inspired desktop image editor built with Electron + TypeScript. Opens and saves **layered PSD files** and edits all common image formats with brushes, layers, blend modes, selections and filters.
 
-## Features (v0.7)
+## Features (v0.8)
 
 | Area | What works |
 |---|---|
 | **Files** | Open/save **PSD** (layers, names, opacity, visibility, blend modes preserved; groups are flattened into layers). Open PNG, JPEG, WebP, GIF, BMP, AVIF, ICO, SVG. Export PNG, JPEG, WebP, BMP, PSD. Drag & drop, multiple document tabs. |
 | **Layers** | Add, duplicate, delete, reorder (drag or buttons), merge down, flatten, rename (double-click), visibility, opacity, 16 blend modes. |
+| **Groups** | Nested layer groups: **Ctrl+click / Shift+click** layers in the panel then **Ctrl+G** (or the folder button) to group; **Ctrl+Shift+G** ungroups. Drag layers into / out of / between groups (top/bottom edge = before/after, middle of a group = inside). Collapse with the arrow. Each group has its own visibility, opacity, **Pass Through** (default) or ordinary blend mode, and an optional **group mask** you can paint. Isolated groups composite as a unit, so adjustment layers inside only affect the group's contents. Duplicate, delete, move (Move tool carries everything inside), Merge Group, Flatten — all undoable. **PSD groups import and export as real groups** (nesting, opacity, blend, mask, hidden, open/closed). |
 | **Layer masks** | Add Reveal All / Hide All / From Selection; paint on the mask with any tool (white reveals, black hides; brush, eraser, bucket, gradient, fills, filters and Invert all work on masks). Click the mask thumbnail to edit it, Shift+click to disable. Apply or delete a mask from the Layer menu. Masks move with their layer, survive merge/duplicate/flip/resize, and **round-trip through PSD**. |
 | **Text** | Text tool (`T`): click to type, click existing text to re-edit. Font, size, bold, italic, alignment, color (foreground). Text stays an editable layer — move it, restyle it, mask it, blend it. Painting on it or applying filters rasterizes it (undoable). |
 | **Clone Stamp** | `S`: Alt+click to set the source, then paint to copy pixels from it. Soft/hard brush tip, size, opacity, flow, spacing, pen pressure. **Aligned** (offset carries across strokes) or restart from the source each stroke. Sample **current layer**, **current & below**, or **all layers** (clone onto a new empty layer without touching the original). A live overlay shows where you're sampling from. Respects selections, works on layer masks, one undo step per stroke. |
@@ -24,13 +25,14 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 ### Known limitations
 - Layers are document-sized (pixels moved off-canvas are cropped).
 - PSD: smart-object editing and layer effects are not preserved. Adjustment layers other than Levels, Curves, Invert, Brightness/Contrast and Hue/Saturation (e.g. Vibrance, Selective Color) open as hidden placeholders with a warning. Brightness/Contrast and Hue/Saturation use PixelForge's own formulas, so they look *similar* but not identical to Photoshop's. Hue/Saturation's per-colour ranges and Lightness are ignored.
+- Groups: a Pass Through group that has a layer-opacity below 100% or a mask is composited as an isolated group (so adjustments inside it stop reaching layers outside it). Ungrouping discards the group's own opacity/mask/blend. You can't merge a layer down into a group (use Merge Group). Clipping masks and vector masks are not supported.
 - Healing is applied when you release the mouse (you see a plain clone while dragging, like Photoshop). Spot Healing matches *colour* of the surroundings only — it can pick a poor source over strongly textured or patterned areas, in which case undo and use the Healing Brush with a hand-picked source.
 - Adjustment layers have no blend modes (only opacity + mask). Each one holds a full-size blank pixel canvas, and each LUT-based adjustment costs a full-image pass per redraw (about 140 ms per layer at 12 megapixels in a software-rendered browser), so many adjustment layers on very large images will feel slower while painting. Text layers are saved as pixels, so they re-open as normal (rasterized) layers in PixelForge and Photoshop. Vector masks and mask feather/density are ignored.
 - No TIFF/RAW support yet.
 
 ## Shortcuts
 `V` move · `M` marquee · `L` lasso · `W` magic wand · `B` brush · `S` clone stamp · `J` healing brush · `K` spot healing · `E` eraser · `G` bucket · `D` gradient · `T` text · `I` eyedropper · `H` hand · `X` swap colors · `[` `]` brush size
-`Ctrl+N/O/S` new/open/save PSD · `Ctrl+Shift+S` export PNG · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo · `Ctrl+J` duplicate layer · `Ctrl+E` merge down · `Ctrl+A/D` select all/none · `Ctrl+L` levels · `Ctrl+M` curves · `Ctrl+Shift+L` auto levels · `Ctrl+I` invert · `Ctrl+0/1` fit/100% · `Space`+drag pan
+`Ctrl+N/O/S` new/open/save PSD · `Ctrl+Shift+S` export PNG · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo · `Ctrl+J` duplicate layer · `Ctrl+G` / `Ctrl+Shift+G` group / ungroup · `Ctrl+E` merge down · `Ctrl+A/D` select all/none · `Ctrl+L` levels · `Ctrl+M` curves · `Ctrl+Shift+L` auto levels · `Ctrl+I` invert · `Ctrl+0/1` fit/100% · `Space`+drag pan
 
 ## Development
 
@@ -45,7 +47,7 @@ npm run dist:win    # Windows installer + portable exe (electron-builder)
 ```
 
 ## Roadmap
-Adjustment-layer blend modes, more adjustment types (vibrance, color balance, selective color), polygonal lasso, quick selection, content-aware fill, patch tool, layer styles, groups, custom brush tips, tablet tilt, TIFF support.
+Adjustment-layer blend modes, more adjustment types (vibrance, color balance, selective color), polygonal lasso, quick selection, clipping masks, layer styles, content-aware fill, patch tool, custom brush tips, tablet tilt, TIFF support.
 
 ## License
 MIT

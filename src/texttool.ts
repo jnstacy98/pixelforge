@@ -79,7 +79,7 @@ class TextEditor {
     this.layer = null;
     if (layer) {
       layer.hiddenForEdit = false;
-      if (!next.content.trim() && doc.layers.length > 1) doc.removeLayer(layer);
+      if (!next.content.trim() && doc.leafCount > 1) doc.removeLayer(layer);
       else if (JSON.stringify(next) !== JSON.stringify(layer.text)) doc.setText(layer, next);
       else doc.emit('pixels');
     } else if (next.content.trim()) doc.createTextLayer(next);
@@ -109,7 +109,7 @@ export class TextTool implements Tool {
     this.pending = null;
     if (!p) return;
     const hit = [...app.doc.layers].reverse().find((l) => {
-      if (!l.visible || !l.text) return false;
+      if (!app.doc.isShown(l) || !l.text) return false;
       const r = textRect(l.text), pad = 6;
       return p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad;
     });
