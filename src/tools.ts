@@ -3,6 +3,7 @@ import { TextTool } from './texttool';
 import { MarqueeTool, LassoTool, WandTool } from './selecttools';
 import { clipToSelection, selectedFlags } from './selection';
 import { floodSelect } from './flood';
+import { chooseSpotOffset, healPatch } from './heal';
 import { Layer, cloneCanvas, clampRect, ctxOf, makeCanvas, pushPixelEdit, type Rect } from './doc';
 import { composite, flatten } from './render';
 
@@ -57,12 +58,19 @@ class PaintTool implements Tool {
   private onMask = false;
   private snap: HTMLCanvasElement | null = null;   // clone source pixels, frozen at stroke start
   private off = { x: 0, y: 0 };                    // dest → source offset for the current stroke
-  constructor(private erase: boolean, private isClone = false) {}
+  constructor(private kind: 'brush' | 'eraser' | 'clone' | 'heal' | 'spot' = 'brush') {}
+  private get erase() { return this.kind === 'eraser'; }
+  /** Clone and Healing Brush both paint from a user-set source point. */
+  private get isClone() { return this.kind === 'clone' || this.kind === 'heal'; }
+  private get isHeal() { return this.kind === 'heal'; }
+  /** Spot Healing paints a coverage mask, then picks its own source on release. */
+  private get isSpot() { return this.kind === 'spot'; }
   /** On a mask the eraser paints the background color instead of removing alpha. */
   private get erasing() { return this.erase && !this.onMask; }
 
   down(p: Pt, e?: PointerEvent) {
     if (this.isClone && !this.startClone(p, e)) return;
+    if (this.isSpot) this.takeSnap();
     const doc = app.doc;
     this.layer = doc.active;
     this.onMask = this.layer.maskMode;
@@ -73,7 +81,7 @@ class PaintTool implements Tool {
     sctx.clearRect(0, 0, doc.width, doc.height);
     sctx.save();
     if (doc.selection) { const s = doc.selection; sctx.beginPath(); sctx.rect(s.x, s.y, s.w, s.h); sctx.clip(); }
-    doc.stroke = { layer: this.layer, canvas: strokeCanvas, opacity: app.brush.opacity, erase: this.erasing, onMask: this.onMask };
+    doc.stroke = { layer: this.layer, canvas: strokeCanvas, opacity: this.isSpot ? 0.5 : app.brush.opacity, erase: this.erasing, onMask: this.onMask };
     this.dirty = null; this.carry = 0; this.active = true;
     this.dab(p);
     this.last = p;
@@ -92,7 +100,13 @@ class PaintTool implements Tool {
     if (!c.src || c.doc !== doc || c.w !== doc.width || c.h !== doc.height) { app.toast('Alt+click to set a clone source first'); return false; }
     if (!c.aligned || !c.offset) c.offset = { x: c.src.x - Math.round(p.x), y: c.src.y - Math.round(p.y) };
     this.off = c.offset;
-    const layer = doc.active, mode = layer.maskMode ? 'layer' : c.sample;
+    this.takeSnap();
+    return true;
+  }
+
+  /** Freeze the pixels we sample from (current layer, current & below, or everything) at stroke start. */
+  private takeSnap() {
+    const doc = app.doc, layer = doc.active, mode = layer.maskMode ? 'layer' : app.clone.sample;
     if (mode === 'layer') this.snap = cloneCanvas(layer.target);
     else {
       const upTo = mode === 'below' ? doc.layers.indexOf(layer) + 1 : doc.layers.length;
@@ -100,7 +114,6 @@ class PaintTool implements Tool {
       this.snap = makeCanvas(doc.width, doc.height);
       composite(shim, ctxOf(this.snap));
     }
-    return true;
   }
 
   /** A brush-tip-shaped patch of source pixels, positioned on whole pixels so cloning stays sharp. */
@@ -124,12 +137,12 @@ class PaintTool implements Tool {
     let img: HTMLCanvasElement, x: number, y: number;
     if (this.isClone) ({ img, x, y } = this.cloneStamp(p, size));
     else {
-      const color = this.onMask ? grayOf(this.erase ? app.bg : app.fg) : this.erase ? '#000000' : app.fg;
+      const color = this.isSpot ? '#000000' : this.onMask ? grayOf(this.erase ? app.bg : app.fg) : this.erase ? '#000000' : app.fg;
       img = getStamp(Math.max(1, Math.round(size)), b.hardness, color);
       x = p.x - img.width / 2; y = p.y - img.height / 2;
     }
     const ctx = ctxOf(strokeCanvas!);
-    ctx.globalAlpha = b.flow;
+    ctx.globalAlpha = this.isSpot ? 1 : b.flow;
     ctx.drawImage(img, x, y);
     const r = img.width;
     const d = { x: x - 1, y: y - 1, w: r + 2, h: r + 2 };
@@ -141,7 +154,48 @@ class PaintTool implements Tool {
     }
   }
 
-  /** Clone Stamp: show where pixels are being sampled from. */
+  /**
+   * Replace the raw stroke (clone preview / spot coverage) with healed pixels: source texture + colours matched to
+   * the destination's surroundings. Returns false if nothing could be healed (stroke is then discarded).
+   */
+  private healStroke(): boolean {
+    const d = this.dirty!, snap = this.snap!, sctx = ctxOf(strokeCanvas!);
+    const W = snap.width, H = snap.height, pad = 10;
+    const x0 = Math.max(0, Math.floor(d.x - pad)), y0 = Math.max(0, Math.floor(d.y - pad));
+    const r = { x: x0, y: y0, w: Math.min(W, Math.ceil(d.x + d.w + pad)) - x0, h: Math.min(H, Math.ceil(d.y + d.h + pad)) - y0 };
+    if (r.w < 1 || r.h < 1) return false;
+    const cov = sctx.getImageData(r.x, r.y, r.w, r.h).data;
+    const dst = ctxOf(snap).getImageData(r.x, r.y, r.w, r.h).data;
+    let off = this.off;
+    if (this.isSpot) {
+      const found = this.pickSpotOffset(r, d, dst, cov);
+      if (!found) { sctx.clearRect(r.x, r.y, r.w, r.h); app.toast('Spot Healing: no clean area found nearby'); return false; }
+      off = { x: found[0], y: found[1] };
+    }
+    const src = ctxOf(snap).getImageData(r.x + off.x, r.y + off.y, r.w, r.h).data;   // outside the image reads as transparent
+    const img = new ImageData(r.w, r.h);
+    img.data.set(healPatch(dst, src, cov, r.w, r.h));
+    sctx.putImageData(img, r.x, r.y);
+    return true;
+  }
+
+  /** Spot Healing: search rings of offsets around the blemish for the source whose surroundings match best. */
+  private pickSpotOffset(r: Rect, d: Rect, dst: Uint8ClampedArray, cov: Uint8ClampedArray): [number, number] | null {
+    const snap = this.snap!, W = snap.width, H = snap.height;
+    const base = Math.max(d.w, d.h) / 2 + 12, cands: [number, number][] = [];
+    for (const k of [1.6, 2.4, 3.3, 4.5]) for (let a = 0; a < 16; a++) {
+      const dx = Math.round(Math.cos((a * Math.PI) / 8) * base * k), dy = Math.round(Math.sin((a * Math.PI) / 8) * base * k);
+      const apart = Math.abs(dx) >= d.w + 6 || Math.abs(dy) >= d.h + 6;           // source must not overlap the blemish
+      if (apart && r.x + dx >= 0 && r.y + dy >= 0 && r.x + r.w + dx <= W && r.y + r.h + dy <= H) cands.push([dx, dy]);
+    }
+    if (!cands.length) return null;
+    const ax = Math.max(0, r.x + Math.min(...cands.map((c) => c[0]))), ay = Math.max(0, r.y + Math.min(...cands.map((c) => c[1])));
+    const bx = Math.min(W, r.x + r.w + Math.max(...cands.map((c) => c[0]))), by = Math.min(H, r.y + r.h + Math.max(...cands.map((c) => c[1])));
+    const area = ctxOf(snap).getImageData(ax, ay, bx - ax, by - ay).data;
+    return chooseSpotOffset(area, bx - ax, by - ay, ax, ay, dst, cov, r, cands);
+  }
+
+  /** Clone Stamp / Healing Brush: show where pixels are being sampled from. */
   overlay(ctx: CanvasRenderingContext2D, ts: (x: number, y: number) => [number, number]) {
     const c = app.clone;
     if (!this.isClone || !c.src || c.doc !== app.doc) return;
@@ -178,6 +232,8 @@ class PaintTool implements Tool {
     this.active = false;
     const doc = app.doc, s = doc.stroke!;
     ctxOf(strokeCanvas!).restore();
+    if ((this.isHeal || this.isSpot) && this.dirty) { if (!this.healStroke()) this.dirty = null; }
+    if (this.isSpot) s.opacity = 1;
     if (doc.selMask) clipToSelection(doc, strokeCanvas!, strokeCanvas!);
     const ctx = this.layer.tctx;
     ctx.save();
@@ -186,7 +242,7 @@ class PaintTool implements Tool {
     ctx.drawImage(s.canvas, 0, 0);
     ctx.restore();
     doc.stroke = null;
-    pushPixelEdit(doc, this.layer, this.before, this.dirty, this.isClone ? 'Clone Stamp' : this.erase ? 'Eraser' : 'Brush Stroke');
+    pushPixelEdit(doc, this.layer, this.before, this.dirty, this.isHeal ? 'Healing Brush' : this.isSpot ? 'Spot Healing' : this.isClone ? 'Clone Stamp' : this.erase ? 'Eraser' : 'Brush Stroke');
     this.snap = null;
   }
 }
@@ -351,6 +407,6 @@ class EyedropperTool implements Tool {
 class HandTool implements Tool { cursor = 'grab'; down() {} move() {} up() {} }
 
 export const tools: Record<ToolId, Tool> = {
-  move: new MoveTool(), marquee: new MarqueeTool(), brush: new PaintTool(false), eraser: new PaintTool(true),
-  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), clone: new PaintTool(false, true),
+  move: new MoveTool(), marquee: new MarqueeTool(), brush: new PaintTool('brush'), eraser: new PaintTool('eraser'),
+  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), clone: new PaintTool('clone'), heal: new PaintTool('heal'), spot: new PaintTool('spot'),
 };

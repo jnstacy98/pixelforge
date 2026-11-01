@@ -518,6 +518,74 @@ const mm = await page.evaluate(() => window.__app.doc.active.mask.getContext('2d
 assert.equal(mm, 0); ok('clone stamp on a mask copies mask values (black patch)');
 await page.evaluate(() => window.__app.setTool('move'));
 
+
+// 6g. healing brush + spot healing
+const healScene = async (bg, tool) => {
+  await page.evaluate(([bg, tool]) => {
+    window.__blank(400, 300); const a = window.__app, d = a.doc, x = d.active.ctx;
+    x.fillStyle = bg; x.fillRect(0, 0, 400, 300);
+    a.brush.size = 60; a.brush.hardness = 0.6; a.brush.opacity = 1; a.brush.flow = 1; a.brush.spacing = 0.1;
+    a.clone.aligned = true; a.clone.sample = 'layer'; a.clone.src = null; a.clone.offset = null; a.setTool(tool);
+  }, [bg, tool]);
+  await wait();
+};
+const lcol = (x, y) => page.evaluate(([x, y]) => [...window.__app.doc.active.ctx.getImageData(x, y, 1, 1).data], [x, y]);
+const dot = (x, y, r, col) => page.evaluate(([x, y, r, col]) => { const d = window.__app.doc, c = d.active.ctx; c.fillStyle = col; c.beginPath(); c.arc(x, y, r, 0, 7); c.fill(); d.emit('structure'); }, [x, y, r, col]);
+
+// texture is kept, brightness comes from the destination
+await healScene('#646464', 'heal');
+await page.evaluate(() => { const d = window.__app.doc, c = d.active.ctx; for (let y = 50; y < 150; y++) { c.fillStyle = y % 2 ? '#dcdcdc' : '#b4b4b4'; c.fillRect(50, y, 100, 1); } d.emit('structure'); });
+await altClick(100, 100);
+await drag([300, 200], [301, 200]); await wait();
+const col = []; for (let y = 194; y < 206; y++) col.push((await lcol(300, y))[0]);
+const hmean = col.reduce((a, b) => a + b) / col.length, hspread = Math.max(...col) - Math.min(...col);
+assert.ok(Math.abs(hmean - 100) < 15, `mean ${hmean}`); ok(`healing brush matches the destination brightness (mean ${hmean.toFixed(0)}, source was ~200)`);
+assert.ok(hspread >= 25, `spread ${hspread}`); ok(`…while keeping the source texture (stripe contrast ${hspread})`);
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Healing Brush'); ok('one "Healing Brush" history step');
+// seamless edge: just inside vs just outside the patch should be close
+const inside = (await lcol(300 + 26, 200))[0], outside = (await lcol(300 + 36, 200))[0];
+assert.ok(Math.abs(inside - outside) < 22, `edge ${inside} vs ${outside}`); ok('no visible seam at the edge of the patch');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual((await lcol(300, 200)).slice(0, 3), [100, 100, 100]); ok('undo removes the healed patch');
+
+// blemish removal: no ghost of the destination interior
+await healScene('#786e64', 'heal');
+await dot(300, 200, 9, '#0a0a0a');
+assert.ok((await lcol(300, 200))[0] < 20);
+await altClick(100, 100);
+await drag([300, 200], [301, 200]); await wait();
+const bl = await lcol(300, 200);
+assert.ok(Math.abs(bl[0] - 120) <= 5 && Math.abs(bl[1] - 110) <= 5 && Math.abs(bl[2] - 100) <= 5, `got ${bl}`); ok('healing brush removes a dark blemish completely (no ghost)');
+
+// heals relative to what you see: new empty layer, sample all layers
+await healScene('#3232c8', 'heal');
+await page.evaluate(() => { const d = window.__app.doc, c = d.active.ctx; for (let y = 50; y < 150; y++) { c.fillStyle = y % 2 ? '#e63c3c' : '#c82828'; c.fillRect(50, y, 100, 1); } d.emit('structure'); d.addLayer('Heal layer'); window.__app.clone.sample = 'all'; });
+await altClick(100, 100);
+await drag([300, 200], [301, 200]); await wait();
+const hl2 = await lcol(300, 200);
+assert.equal(hl2[3], 255); assert.ok(hl2[2] > 150 && hl2[0] < 90, `got ${hl2}`); ok('Sample: All layers heals onto an empty layer using the visible colours around it');
+
+// spot healing: no source needed, picks a matching area by itself
+await healScene('#646464', 'spot');
+await page.evaluate(() => { const d = window.__app.doc, c = d.active.ctx; c.fillStyle = '#f0f0f0'; c.fillRect(280, 0, 120, 300); d.emit('structure'); });
+await dot(150, 150, 9, '#101010');
+await drag([150, 150], [151, 150]);
+await page.waitForTimeout(120);
+const spotPx = await lcol(150, 150);
+assert.ok(Math.abs(spotPx[0] - 100) <= 6, `got ${spotPx}`); ok('spot healing removes a blemish with no source set');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Spot Healing'); ok('one "Spot Healing" history step');
+assert.ok(Math.abs((await lcol(120, 150))[0] - 100) <= 3 && (await lcol(200, 150))[0] <= 106); ok('…and did not pull in the bright strip nearby (matched the grey surroundings)');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok((await lcol(150, 150))[0] < 30); ok('undo restores the blemish');
+
+// spot healing with nowhere to sample from degrades gracefully
+await page.evaluate(() => { window.__blank(60, 60); const a = window.__app, d = a.doc, c = d.active.ctx; c.fillStyle = '#888'; c.fillRect(0, 0, 60, 60); c.fillStyle = '#111'; c.beginPath(); c.arc(30, 30, 6, 0, 7); c.fill(); d.emit('structure'); a.brush.size = 50; a.clone.sample = 'layer'; a.setTool('spot'); });
+await wait();
+const hbefore = await page.evaluate(() => window.__app.doc.history.undoLabel);
+await drag([30, 30], [31, 30]); await wait();
+assert.match(await page.evaluate(() => document.getElementById('toast').textContent), /no clean area/i); assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), hbefore); ok('spot healing with no usable area warns and changes nothing');
+await page.evaluate(() => window.__app.setTool('move'));
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

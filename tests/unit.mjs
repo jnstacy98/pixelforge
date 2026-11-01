@@ -119,4 +119,68 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.equal(P.fromPsdAdjustment({ type: 'vibrance', vibrance: 20 }), null);
   assert.equal(P.fromPsdAdjustment({ type: 'selective color' }), null);
 });
+
+// ---- healing maths
+import * as H from '../src/heal.ts';
+const mkRGBA = (w, h, f) => { const a = new Uint8ClampedArray(w * h * 4); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const [r, g, b, al = 255] = f(x, y); const i = (y * w + x) * 4; a[i] = r; a[i + 1] = g; a[i + 2] = b; a[i + 3] = al; } return a; };
+const disc = (cx, cy, r) => (x, y) => (Math.hypot(x - cx, y - cy) <= r ? 255 : 0);
+
+t('membrane: constant boundary fills the hole with that constant', () => {
+  const w = 40, h = 40, f = new Float32Array(w * h * 3), k = new Uint8Array(w * h);
+  for (let p = 0; p < w * h; p++) { const x = p % w, y = (p / w) | 0; if (Math.hypot(x - 20, y - 20) > 9) { k[p] = 1; f[p * 3] = 50; f[p * 3 + 1] = -20; f[p * 3 + 2] = 7; } }
+  const o = H.fillMembrane(f, k, w, h);
+  for (let p = 0; p < w * h; p++) { assert.ok(Math.abs(o[p * 3] - 50) < 0.5 && Math.abs(o[p * 3 + 1] + 20) < 0.5 && Math.abs(o[p * 3 + 2] - 7) < 0.5, `pixel ${p}`); }
+});
+t('membrane: linear ramp is reproduced inside the hole', () => {
+  const w = 60, h = 40, f = new Float32Array(w * h * 3), k = new Uint8Array(w * h);
+  for (let p = 0; p < w * h; p++) { const x = p % w, y = (p / w) | 0; f[p * 3] = x * 2; if (!(x > 22 && x < 38 && y > 12 && y < 28)) k[p] = 1; }
+  const o = H.fillMembrane(f, k, w, h);
+  let worst = 0; for (let y = 13; y < 28; y++) for (let x = 23; x < 38; x++) worst = Math.max(worst, Math.abs(o[(y * w + x) * 3] - x * 2));
+  assert.ok(worst < 6, `worst error ${worst}`);
+});
+t('membrane: known pixels are untouched and an all-unknown field stays zero', () => {
+  const w = 8, h = 8, f = new Float32Array(w * h * 3).fill(9), k = new Uint8Array(w * h).fill(1);
+  assert.equal(H.fillMembrane(f, k, w, h)[5], 9);
+  assert.ok(H.fillMembrane(f, new Uint8Array(w * h), w, h).every((v) => v === 0));
+});
+t('heal: keeps source texture but takes the destination brightness', () => {
+  const w = 60, h = 60, dc = disc(30, 30, 18);
+  const dst = mkRGBA(w, h, () => [100, 100, 100]);
+  const src = mkRGBA(w, h, (x, y) => (y % 2 ? [220, 220, 220] : [180, 180, 180]));           // bright stripes, mean 200
+  const cov = mkRGBA(w, h, (x, y) => [0, 0, 0, dc(x, y)]);
+  const out = H.healPatch(dst, src, cov, w, h);
+  const vals = []; for (let y = 24; y < 36; y++) vals.push(out[(y * w + 30) * 4]);
+  const mean = vals.reduce((a, b) => a + b) / vals.length, spread = Math.max(...vals) - Math.min(...vals);
+  assert.ok(Math.abs(mean - 100) < 6, `mean ${mean}`); assert.ok(spread >= 35, `texture spread ${spread}`);
+  assert.equal(out[(2 * w + 2) * 4 + 3], 0); assert.equal(out[(30 * w + 30) * 4 + 3], 255);
+});
+t('heal: removes a blemish completely (no ghost of the destination interior)', () => {
+  const w = 60, h = 60, dc = disc(30, 30, 14);
+  const dst = mkRGBA(w, h, (x, y) => (Math.hypot(x - 30, y - 30) < 8 ? [10, 10, 10] : [120, 110, 100]));
+  const src = mkRGBA(w, h, () => [120, 110, 100]);
+  const cov = mkRGBA(w, h, (x, y) => [0, 0, 0, dc(x, y)]);
+  const out = H.healPatch(dst, src, cov, w, h), c = (30 * w + 30) * 4;
+  assert.ok(Math.abs(out[c] - 120) < 3 && Math.abs(out[c + 1] - 110) < 3 && Math.abs(out[c + 2] - 100) < 3, `center ${out[c]},${out[c + 1]},${out[c + 2]}`);
+});
+t('heal: with no usable boundary it degrades to a plain clone', () => {
+  const w = 10, h = 10, dst = mkRGBA(w, h, () => [0, 0, 0, 0]), src = mkRGBA(w, h, () => [90, 80, 70]);
+  const cov = mkRGBA(w, h, () => [0, 0, 0, 255]);
+  const out = H.healPatch(dst, src, cov, w, h);
+  assert.deepEqual([...out.slice(0, 4)], [90, 80, 70, 255]);
+});
+t('heal: soft coverage becomes soft alpha', () => {
+  const w = 20, h = 20, dst = mkRGBA(w, h, () => [50, 50, 50]), src = mkRGBA(w, h, () => [200, 200, 200]);
+  const cov = mkRGBA(w, h, (x) => [0, 0, 0, x < 10 ? 0 : 128]);
+  const out = H.healPatch(dst, src, cov, w, h);
+  assert.equal(out[(5 * w + 15) * 4 + 3], 128); assert.equal(out[(5 * w + 3) * 4 + 3], 0);
+});
+t('spot healing picks the candidate whose surroundings match', () => {
+  // area: left 100px mid-gray, right 100px bright; region sits at x=40..60 in gray
+  const aw = 200, ah = 80, area = mkRGBA(aw, ah, (x) => (x < 100 ? [100, 100, 100] : [240, 240, 240]));
+  const r = { x: 40, y: 30, w: 20, h: 20 };
+  const dst = mkRGBA(r.w, r.h, () => [100, 100, 100]), cov = mkRGBA(r.w, r.h, (x, y) => [0, 0, 0, Math.hypot(x - 10, y - 10) < 5 ? 255 : 0]);
+  const best = H.chooseSpotOffset(area, aw, ah, 0, 0, dst, cov, r, [[100, 0], [-30, 0], [0, 0 + 25]]);
+  assert.notEqual(best[0], 100); // the offset landing on the bright half must lose
+  assert.equal(H.chooseSpotOffset(area, aw, ah, 0, 0, dst, cov, r, [[500, 0]]), null);
+});
 console.log(`\n${n} unit tests passed`);
