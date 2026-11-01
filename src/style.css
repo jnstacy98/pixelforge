@@ -106,3 +106,6 @@ input[type=range] { accent-color: var(--accent); }
 .fxbadge { font-size: 10px; font-style: italic; font-weight: 700; color: #9db8e8; border: 1px solid #3b5a8a; border-radius: 3px; padding: 0 4px; cursor: pointer; }
 .fxbadge:hover { background: #3b5a8a; color: #fff; }
 .lprops .fill { display: contents; }
+
+.caf-overlay { position: fixed; inset: 0; z-index: 400; background: #000a; display: grid; place-content: center; justify-items: center; gap: 14px; font-size: 14px; }
+.caf-bar { width: 320px; height: 8px; background: #333; border-radius: 4px; overflow: hidden; } .caf-bar > div { height: 100%; width: 0; background: var(--accent); transition: width .15s; }

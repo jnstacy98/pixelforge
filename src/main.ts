@@ -11,6 +11,7 @@ import { defaultAdjustment } from './adjust';
 import { composite } from './render';
 import { editor } from './texttool';
 import { clearStyle, copyStyle, isStyling, openLayerStyle, pasteStyle } from './stylesdialog';
+import { contentAwareFill, isFilling } from './contentfill';
 import { autoLevels, editAdjustment, isAdjusting, newAdjustmentLayer, openCurves, openLevels } from './adjustdialog';
 
 // ------------------------------------------------------------------ documents
@@ -96,6 +97,7 @@ const menus: { title: string; items: () => Item[] }[] = [
       { label: h.canUndo ? `Undo ${h.undoLabel}` : 'Undo', shortcut: 'Ctrl+Z', action: () => h.undo() },
       { label: h.canRedo ? `Redo ${h.redoLabel}` : 'Redo', shortcut: 'Ctrl+Shift+Z', action: () => h.redo() },
       '-',
+      { label: 'Content-Aware Fill…', shortcut: 'Shift+F5', action: () => contentAwareFill() },
       { label: 'Fill with Foreground', shortcut: 'Alt+Backspace', action: () => fillSelection(app.fg) },
       { label: 'Fill with Background', shortcut: 'Ctrl+Backspace', action: () => fillSelection(app.bg) },
       { label: 'Clear', shortcut: 'Delete', action: clearSelection },
@@ -226,7 +228,8 @@ function initMenus() {
 
 // ------------------------------------------------------------------ shortcuts
 window.addEventListener('keydown', (e) => {
-  if (isTyping(e) || isAdjusting() || isStyling()) return;
+  if (isTyping(e) || isAdjusting() || isStyling() || isFilling()) return;
+  if (e.key === 'F5' && e.shiftKey) { e.preventDefault(); contentAwareFill(); return; }
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   const doc = app.doc;
   if (mod && e.altKey && e.code === 'KeyG') { e.preventDefault(); doc.toggleClip(); return; }
@@ -342,3 +345,4 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const fx = (d: Doc) => Object.fromEntries(d.layers.map((l) => [l.name, { effects: l.effects, fill: Math.round(l.fillOpacity * 100) / 100 }]));
   return { before: sample(app.doc), after: sample(d2), fxBefore: fx(app.doc), fxAfter: fx(d2), notes: d2.notes };
 };
+(window as any).__caf = (o: any) => contentAwareFill(o);

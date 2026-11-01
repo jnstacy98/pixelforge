@@ -4,3 +4,4 @@ release
 *.log
 tests/screenshot.png
 tests/screenshot*.png
+tests/caf-*.png

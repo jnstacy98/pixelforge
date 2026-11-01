@@ -1053,6 +1053,124 @@ const perf = await page.evaluate(() => {
 });
 assert.ok(perf.first < 2500 && perf.second < perf.first, JSON.stringify(perf)); ok(`styles on a 12 MP canvas: first render ${perf.first} ms, cached ${perf.second} ms`);
 
+
+// 6k. content-aware fill
+const cafScene = async () => {
+  await page.evaluate(() => {
+    window.__blank(400, 300); const a = window.__app, d = a.doc, x = d.layers[0].ctx;
+    const stripe = (px, py) => ((((px + py) / 14) | 0) % 2 ? '#d8c9a0' : '#5b7a52');
+    for (let py = 0; py < 300; py++) for (let px = 0; px < 400; px += 1) { x.fillStyle = stripe(px, py); x.fillRect(px, py, 1, 1); }
+    window.__stripe = stripe;
+    x.fillStyle = '#e02020'; x.beginPath(); x.arc(200, 150, 42, 0, 7); x.fill();           // the "object" to remove
+    d.emit('structure'); a.setTool('move');
+  });
+  await wait();
+};
+const setEllipseSel = (cx, cy, r) => page.evaluate(([cx, cy, r]) => { const d = window.__app.doc, m = document.createElement('canvas'); m.width = d.width; m.height = d.height; const c = m.getContext('2d'); c.beginPath(); c.arc(cx, cy, r, 0, 7); c.fill(); d.setSelection({ x: cx - r, y: cy - r, w: 2 * r, h: 2 * r }, m); }, [cx, cy, r]);
+const redCount = (x0, y0, w, h) => page.evaluate(([x0, y0, w, h]) => { const d = window.__app.doc.layers[0].ctx.getImageData(x0, y0, w, h).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 150 && d[i + 1] < 90 && d[i + 2] < 90) n++; return n; }, [x0, y0, w, h]);
+const bgError = () => page.evaluate(() => { const l = window.__app.doc.layers[0], d = l.ctx.getImageData(150, 100, 100, 100).data; let e = 0, n = 0; for (let y = 0; y < 100; y++) for (let x = 0; x < 100; x++) { if (Math.hypot(x - 50, y - 50) > 50) continue; const t = window.__stripe(x + 150, y + 100); const tr = parseInt(t.slice(1, 3), 16), tg = parseInt(t.slice(3, 5), 16), tb = parseInt(t.slice(5, 7), 16); const i = (y * 100 + x) * 4; e += Math.abs(d[i] - tr) + Math.abs(d[i + 1] - tg) + Math.abs(d[i + 2] - tb); n += 3; } return e / n; });
+
+await cafScene();
+assert.ok(await redCount(150, 100, 100, 100) > 4000); ok('scene: a red object sits on diagonal stripes');
+await page.evaluate(() => window.__app.doc.setSelection(null));
+assert.equal(await page.evaluate(() => window.__caf({ expand: 3, sample: 'layer', quality: 'normal' })), false);
+assert.match(await page.evaluate(() => document.getElementById('toast').textContent), /selection/i); ok('Content-Aware Fill without a selection explains what to do');
+
+await setEllipseSel(200, 150, 52);
+const t0 = Date.now();
+const cafP = page.evaluate(() => window.__caf({ expand: 4, sample: 'layer', quality: 'normal' }));
+await page.waitForSelector('.caf-overlay', { timeout: 3000 }).catch(() => {});
+const finished = await cafP; const cafMs = Date.now() - t0;
+assert.equal(finished, true); assert.equal(await page.locator('.caf-overlay').count(), 0); ok(`fill completes and the progress overlay goes away (${cafMs} ms)`);
+assert.equal(await redCount(150, 100, 100, 100), 0); ok('the object is gone');
+const err = await bgError(); assert.ok(err < 40, `background error ${err}`); ok(`the hole is filled with the surrounding stripes (mean error vs the true background: ${err.toFixed(1)} / 255)`);
+await wait(); await page.screenshot({ path: 'tests/caf-after.png' });
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Content-Aware Fill'); assert.equal(await page.evaluate(() => !!window.__app.doc.selection), true); ok('one undo step; the selection is kept');
+const outsideBad = await page.evaluate(() => { const l = window.__app.doc.layers[0], d = l.ctx.getImageData(0, 0, 400, 300).data; let bad = 0; for (let y = 0; y < 300; y++) for (let x = 0; x < 400; x++) { if (Math.hypot(x - 200, y - 150) < 58) continue; const t = window.__stripe(x, y), i = (y * 400 + x) * 4; if (Math.abs(d[i] - parseInt(t.slice(1, 3), 16)) > 2) bad++; } return bad; });
+assert.equal(outsideBad, 0); ok('pixels outside the selection are untouched');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(await redCount(150, 100, 100, 100) > 4000); ok('undo brings the object back');
+await page.keyboard.press('Control+Shift+z'); await wait();
+assert.equal(await redCount(150, 100, 100, 100), 0); ok('redo removes it again');
+
+// the dialog path: Edit menu + Shift+F5 shortcut
+await cafScene(); await setEllipseSel(200, 150, 52);
+await page.locator('#menubar .menu .title:text-is("Edit")').click(); await page.locator('#menubar .menu.open .mi:has-text("Content-Aware Fill")').click();
+await page.waitForSelector('.modal'); assert.match(await page.locator('.modal h2').textContent(), /Content-Aware Fill/); ok('Edit ▸ Content-Aware Fill… opens its options dialog');
+await page.locator('.modal select[name=quality]').selectOption('fast'); await page.locator('.modal button.primary').click();
+await page.waitForFunction(() => !document.querySelector('.caf-overlay') && document.getElementById('toast').textContent.includes('finished'), null, { timeout: 20000 });
+assert.equal(await redCount(150, 100, 100, 100), 0); ok('…and fills the selection when confirmed (Fast quality)');
+await cafScene(); await setEllipseSel(200, 150, 52);
+await page.keyboard.press('Shift+F5'); await page.waitForSelector('.modal'); await page.keyboard.press('Escape'); await wait();
+assert.ok(await redCount(150, 100, 100, 100) > 4000); ok('Shift+F5 opens the dialog; Escape leaves the image untouched');
+
+// cancel mid-way applies nothing
+await cafScene(); await setEllipseSel(200, 150, 70);
+const cancelP = page.evaluate(() => window.__caf({ expand: 3, sample: 'layer', quality: 'high' }));
+await page.waitForSelector('.caf-overlay'); await page.click('.caf-overlay button');
+assert.equal(await cancelP, false); assert.ok(await redCount(150, 100, 100, 100) > 4000); assert.equal(await page.locator('.caf-overlay').count(), 0); ok('Cancel stops the fill and leaves the image unchanged');
+assert.match(await page.evaluate(() => document.getElementById('toast').textContent), /cancel/i);
+
+// sample all layers: the object lives on its own layer above a textured background
+await page.evaluate(() => {
+  window.__blank(400, 300); const a = window.__app, d = a.doc, x = d.layers[0].ctx;
+  const stripe = (px, py) => ((((px + py) / 14) | 0) % 2 ? '#d8c9a0' : '#5b7a52'); window.__stripe = stripe;
+  for (let py = 0; py < 300; py++) for (let px = 0; px < 400; px++) { x.fillStyle = stripe(px, py); x.fillRect(px, py, 1, 1); }
+  const o = d.addLayer('Object'); o.ctx.fillStyle = '#e02020'; o.ctx.beginPath(); o.ctx.arc(200, 150, 42, 0, 7); o.ctx.fill(); d.emit('structure');
+});
+await setEllipseSel(200, 150, 52);
+assert.equal(await page.evaluate(() => window.__caf({ expand: 4, sample: 'all', quality: 'normal' })), true); await wait();
+const lay = await page.evaluate(() => { const d = window.__app.doc, o = d.layers[1].ctx.getImageData(200, 150, 1, 1).data, b = d.layers[0].ctx.getImageData(200, 150, 1, 1).data; return { objAlpha: o[3], objRed: o[0] > 150 && o[1] < 90, bg: Array.from(b) }; });
+assert.equal(lay.objAlpha, 255); assert.equal(lay.objRed, false); ok('Sample: All layers writes the fill onto the active layer, using the visible image as the source');
+assert.equal(await page.evaluate(() => { const l = window.__app.doc.layers[0], d = l.ctx.getImageData(200, 150, 1, 1).data, t = window.__stripe(200, 150); return Math.abs(d[0] - parseInt(t.slice(1, 3), 16)); }), 0); ok('…and the background layer below is not modified');
+
+// groups are refused
+await gx(`d.newGroup(); return 1`);
+assert.equal(await page.evaluate(() => window.__caf({ expand: 3, sample: 'layer', quality: 'fast' })), false); assert.match(await page.evaluate(() => document.getElementById('toast').textContent), /group/i); ok('Content-Aware Fill on a group is refused with a hint');
+await page.keyboard.press('Control+z'); await wait();
+
+
+// regression guard: a textured scene (grain + picket fence) with a large object removed — measured against the true background
+const cafQuality = await page.evaluate(async () => {
+  const W = 900, H = 560;
+  const scene = (withObject) => {
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const x = cv.getContext('2d', { willReadFrequently: true });
+    let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const sky = x.createLinearGradient(0, 0, 0, 250); sky.addColorStop(0, '#7fb8e6'); sky.addColorStop(1, '#d6ecf7'); x.fillStyle = sky; x.fillRect(0, 0, W, 250);
+    x.fillStyle = '#8fb08a'; x.beginPath(); x.moveTo(0, 230); x.bezierCurveTo(200, 170, 420, 250, 650, 190); x.bezierCurveTo(780, 160, 860, 200, 900, 190); x.lineTo(900, 300); x.lineTo(0, 300); x.fill();
+    x.fillStyle = '#5b9a45'; x.fillRect(0, 280, W, H - 280);
+    const img = x.getImageData(0, 280, W, H - 280), px = img.data;
+    for (let i = 0; i < px.length; i += 4) { const n = (rnd() - 0.5) * 46, row = ((i / 4) / W) | 0; px[i] += n * 0.8 - row * 0.05; px[i + 1] += n; px[i + 2] += n * 0.6; }
+    x.putImageData(img, 0, 280);
+    for (let k = 0; k < 2600; k++) { x.strokeStyle = `rgba(${40 + rnd() * 40},${110 + rnd() * 70},${40 + rnd() * 30},.55)`; x.lineWidth = 1.2; const gx = rnd() * W, gy = 285 + rnd() * (H - 285); x.beginPath(); x.moveTo(gx, gy); x.lineTo(gx + (rnd() - 0.5) * 6, gy - 8 - rnd() * 10); x.stroke(); }
+    for (let fx = 20; fx < W; fx += 46) { x.fillStyle = '#e9dfc9'; x.fillRect(fx, 300, 30, 150); x.fillStyle = '#cfc2a6'; x.fillRect(fx + 26, 300, 4, 150); x.beginPath(); x.moveTo(fx, 300); x.lineTo(fx + 15, 280); x.lineTo(fx + 30, 300); x.fill(); }
+    x.fillStyle = '#b8aa8c'; x.fillRect(0, 330, W, 10); x.fillRect(0, 410, W, 10);
+    if (withObject) { x.fillStyle = '#ff7b1a'; x.beginPath(); x.ellipse(430, 405, 120, 62, 0, 0, 7); x.fill(); x.fillStyle = '#222'; x.beginPath(); x.arc(360, 470, 28, 0, 7); x.arc(505, 470, 28, 0, 7); x.fill(); x.fillStyle = '#ffd24d'; x.fillRect(395, 330, 70, 55); }
+    return x.getImageData(0, 0, W, H);
+  };
+  window.__blank(W, H); const d = window.__app.doc, truth = scene(false);
+  d.layers[0].ctx.putImageData(scene(true), 0, 0);
+  const m = document.createElement('canvas'); m.width = W; m.height = H; const c = m.getContext('2d');
+  c.beginPath(); [[300, 320], [500, 318], [575, 380], [560, 480], [510, 505], [350, 505], [300, 470], [295, 385]].forEach(([x, y], i) => (i ? c.lineTo(x, y) : c.moveTo(x, y))); c.closePath(); c.fill();
+  const mask = c.getImageData(0, 0, W, H).data;
+  d.setSelection({ x: 295, y: 318, w: 280, h: 187 }, m);
+  const t0 = performance.now(); await window.__caf({ expand: 4, sample: 'layer', quality: 'high' }); const ms = Math.round(performance.now() - t0);
+  const got = d.layers[0].ctx.getImageData(0, 0, W, H);
+  const blur = (img) => { const c1 = document.createElement('canvas'); c1.width = W; c1.height = H; c1.getContext('2d').putImageData(img, 0, 0); const c2 = document.createElement('canvas'); c2.width = W; c2.height = H; const x2 = c2.getContext('2d', { willReadFrequently: true }); x2.filter = 'blur(4px)'; x2.drawImage(c1, 0, 0); return x2.getImageData(0, 0, W, H).data; };
+  const bl = blur(got), bt = blur(truth); let e = 0, n = 0, stray = 0, orange = 0;
+  for (let i = 0; i < mask.length; i += 4) if (mask[i + 3] > 127) {
+    e += Math.abs(bl[i] - bt[i]) + Math.abs(bl[i + 1] - bt[i + 1]) + Math.abs(bl[i + 2] - bt[i + 2]); n += 3;
+    const y = ((i / 4) / W) | 0, r = got.data[i], g = got.data[i + 1], b2 = got.data[i + 2];
+    if (y > 300 && r > 120 && r < 170 && g > 160 && g < 195 && b2 > 120 && b2 < 160 && Math.abs(r - 143) < 20) stray++;
+    if (r > 220 && g > 90 && g < 160 && b2 < 70) orange++;
+  }
+  return { ms, struct: e / n, stray, orange };
+});
+assert.equal(cafQuality.orange, 0, `object pixels left: ${cafQuality.orange}`); ok('textured scene: no trace of the removed object remains');
+assert.ok(cafQuality.stray < 300, `stray foreign-colour pixels: ${cafQuality.stray}`); ok(`…no foreign patch is pasted in from elsewhere (${cafQuality.stray} stray px; the unweighted version produced >1000)`);
+assert.ok(cafQuality.struct < 22, `structural error ${cafQuality.struct}`); ok(`…and the structure matches the true background (low-pass error ${cafQuality.struct.toFixed(1)}/255, ${(cafQuality.ms / 1000).toFixed(1)} s for a 280×187 region at High quality)`);
+await page.screenshot({ path: 'tests/caf-after2.png' });
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

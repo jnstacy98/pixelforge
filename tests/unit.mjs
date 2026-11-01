@@ -240,4 +240,86 @@ t('PSD effects with FRGB colours and unknown blend modes are tolerated', () => {
   const r = F.fromPsdEffects({ solidFill: [{ enabled: true, color: { fr: 1, fg: 0, fb: 0 }, blendMode: 'vivid light', opacity: 1 }] });
   assert.equal(r.fx.colorOverlay.color, '#ff0000'); assert.equal(r.fx.colorOverlay.blend, 'normal');
 });
+
+// ---- content-aware fill (async: tests are queued and awaited below)
+import * as IP from '../src/inpaint.ts';
+const asyncTests = [];
+const ta = (name, fn) => asyncTests.push([name, fn]);
+const img = (w, h, f) => { const a = new Uint8ClampedArray(w * h * 4); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const c = f(x, y); const i = (y * w + x) * 4; a[i] = c[0]; a[i + 1] = c[1]; a[i + 2] = c[2]; a[i + 3] = c[3] ?? 255; } return a; };
+const rect = (w, h, x0, y0, x1, y1) => { const m = new Uint8Array(w * h); for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) m[y * w + x] = 1; return m; };
+const mae = (a, b, m) => { let e = 0, k = 0; for (let p = 0; p < m.length; p++) if (m[p]) for (let c = 0; c < 3; c++) { e += Math.abs(a[p * 4 + c] - b[p * 4 + c]); k++; } return e / k; };
+const stripesF = (x) => (((x / 8) | 0) % 2 ? [200, 40, 40] : [40, 40, 200]);
+let seedN = 5; const rng = () => { seedN = (seedN * 16807) % 2147483647; return seedN / 2147483647; };
+
+ta('content-aware fill continues stripes through the hole (matches ground truth)', async () => {
+  const w = 128, h = 128, hole = rect(w, h, 44, 44, 84, 84), truth = img(w, h, stripesF);
+  const src = img(w, h, (x, y) => (hole[y * w + x] ? [0, 255, 0] : stripesF(x)));
+  const out = await IP.inpaint(src, w, h, hole, { seed: 3 });
+  assert.ok(mae(out, truth, hole) < 6, `error ${mae(out, truth, hole)}`);
+});
+ta('known pixels are never modified', async () => {
+  const w = 96, h = 96, hole = rect(w, h, 30, 30, 60, 60), src = img(w, h, (x, y) => [(x * 5) & 255, (y * 3) & 255, (x * y) & 255]);
+  const out = await IP.inpaint(src, w, h, hole);
+  for (let p = 0; p < w * h; p++) if (!hole[p]) for (let c = 0; c < 4; c++) assert.equal(out[p * 4 + c], src[p * 4 + c]);
+});
+ta('the hole\'s own (junk) contents are never used as a source', async () => {
+  const w = 100, h = 100, hole = rect(w, h, 35, 35, 65, 65);
+  const src = img(w, h, (x, y) => (hole[y * w + x] ? [255, 0, 255] : [90 + ((x ^ y) & 31), 140, 90 + ((x + y) & 31)]));
+  const out = await IP.inpaint(src, w, h, hole);
+  for (let p = 0; p < w * h; p++) if (hole[p]) assert.ok(Math.abs(out[p * 4] - 255) > 90 || Math.abs(out[p * 4 + 1]) > 60, `magenta leaked at ${p}`);
+});
+ta('keeps a hard edge instead of blurring across it (object boundary)', async () => {
+  const w = 120, h = 120, hole = rect(w, h, 40, 40, 80, 80);
+  const side = (x) => (x < 60 ? [220, 30, 30] : [30, 30, 220]);
+  const src = img(w, h, (x, y) => (hole[y * w + x] ? [0, 255, 0] : side(x)));
+  const out = await IP.inpaint(src, w, h, hole, { seed: 2 });
+  let crisp = 0, n = 0; for (let p = 0; p < w * h; p++) if (hole[p]) { n++; const r = out[p * 4], b = out[p * 4 + 2]; if ((r > 170 && b < 90) || (b > 170 && r < 90)) crisp++; }
+  assert.ok(crisp / n > 0.9, `only ${(crisp / n * 100).toFixed(0)}% of hole pixels are cleanly red or blue`);
+});
+ta('synthesises texture rather than smearing a flat colour', async () => {
+  const w = 128, h = 128, hole = rect(w, h, 40, 40, 90, 90), src = img(w, h, (x, y) => { const v = hole[y * w + x] ? 255 : 128 + (rng() - 0.5) * 90; return [v, v, v]; });
+  const out = await IP.inpaint(src, w, h, hole, { seed: 4 });
+  const stat = (arr, m) => { let s = 0, s2 = 0, k = 0; for (let p = 0; p < m.length; p++) if (m[p]) { const v = arr[p * 4]; s += v; s2 += v * v; k++; } const mean = s / k; return { mean, sd: Math.sqrt(s2 / k - mean * mean) }; };
+  const outside = new Uint8Array(w * h).map((_, p) => (hole[p] ? 0 : 1)), a = stat(src, outside), b = stat(out, hole);
+  assert.ok(Math.abs(a.mean - b.mean) < 10, `mean ${a.mean} vs ${b.mean}`); assert.ok(b.sd > a.sd * 0.6, `sd ${b.sd} vs ${a.sd}`);
+});
+ta('smooth gradients are continued smoothly', async () => {
+  const w = 100, h = 100, hole = rect(w, h, 30, 30, 70, 70), f = (x, y) => [x * 2, y * 2, 100 + x + y];
+  const out = await IP.inpaint(img(w, h, (x, y) => (hole[y * w + x] ? [0, 0, 0] : f(x, y))), w, h, hole, { seed: 1 });
+  assert.ok(mae(out, img(w, h, f), hole) < 12, `error ${mae(out, img(w, h, f), hole)}`);
+});
+ta('holes touching the image border are filled', async () => {
+  const w = 90, h = 90, hole = rect(w, h, 0, 20, 25, 55), src = img(w, h, (x, y) => (hole[y * w + x] ? [0, 255, 0] : stripesF(y)));
+  const out = await IP.inpaint(src, w, h, hole);
+  assert.ok(mae(out, img(w, h, (x, y) => stripesF(y)), hole) < 25, 'border hole not reconstructed');
+});
+ta('degenerate inputs: empty hole, whole-image hole, tiny image', async () => {
+  const src = img(40, 40, () => [10, 20, 30]);
+  assert.deepEqual([...(await IP.inpaint(src, 40, 40, new Uint8Array(1600)))], [...src]);
+  const all = await IP.inpaint(src, 40, 40, new Uint8Array(1600).fill(1)); assert.ok(all.every((v) => Number.isFinite(v)));
+  const small = await IP.inpaint(img(9, 9, () => [1, 2, 3]), 9, 9, rect(9, 9, 3, 3, 6, 6)); assert.ok(small.every((v) => Number.isFinite(v)));
+});
+ta('same seed → same result; different seed still fills', async () => {
+  const w = 80, h = 80, hole = rect(w, h, 25, 25, 55, 55), src = img(w, h, (x, y) => (hole[y * w + x] ? [0, 0, 0] : [(x * 7) & 255, (y * 5) & 255, ((x + y) * 3) & 255]));
+  const a = await IP.inpaint(src, w, h, hole, { seed: 9 }), b = await IP.inpaint(src, w, h, hole, { seed: 9 });
+  assert.deepEqual([...a], [...b]);
+});
+ta('alpha is carried along: a transparent surround stays transparent inside the hole', async () => {
+  const w = 80, h = 80, hole = rect(w, h, 30, 30, 50, 50), src = img(w, h, (x, y) => (hole[y * w + x] ? [0, 255, 0, 255] : [200, 100, 50, 0]));
+  const out = await IP.inpaint(src, w, h, hole); for (let p = 0; p < w * h; p++) if (hole[p]) assert.ok(out[p * 4 + 3] < 40, `alpha ${out[p * 4 + 3]}`);
+});
+ta('cancellation aborts promptly', async () => {
+  const w = 100, h = 100, hole = rect(w, h, 30, 30, 70, 70); let calls = 0;
+  await assert.rejects(IP.inpaint(img(w, h, () => [1, 2, 3]), w, h, hole, { shouldCancel: () => ++calls > 2 }), /cancelled/);
+});
+ta('expandMask grows a hole by the requested radius', async () => {
+  const w = 40, h = 40, m = rect(w, h, 15, 15, 25, 25), g = IP.expandMask(m, w, h, 3);
+  assert.equal(g[20 * w + 12], 1); assert.equal(g[20 * w + 11], 0); assert.equal(IP.expandMask(m, w, h, 0)[20 * w + 12], 0);
+});
+ta('performance: 256×256 image with a 60×60 hole fills in a few seconds', async () => {
+  const w = 256, h = 256, hole = rect(w, h, 98, 98, 158, 158), src = img(w, h, (x, y) => (hole[y * w + x] ? [0, 0, 0] : [(Math.sin(x / 9) * 60 + 128) | 0, (Math.cos(y / 7) * 60 + 128) | 0, ((x ^ y) & 63) + 100]));
+  const t0 = performance.now(); await IP.inpaint(src, w, h, hole); const ms = performance.now() - t0;
+  console.log(`      (256×256, 60×60 hole: ${Math.round(ms)} ms)`); assert.ok(ms < 8000, `${ms} ms`);
+});
+for (const [name, fn] of asyncTests) { await fn(); n++; console.log(`  ✓ ${name}`); }
 console.log(`\n${n} unit tests passed`);
