@@ -233,12 +233,81 @@ t('effects survive a PSD conversion round-trip', () => {
 });
 t('unsupported PSD effects are reported, supported ones kept', () => {
   const r = F.fromPsdEffects({ dropShadow: [{ enabled: true, size: { units: 'Pixels', value: 5 }, distance: { units: 'Pixels', value: 3 }, color: { r: 0, g: 0, b: 0 }, opacity: 0.5, angle: 120, blendMode: 'multiply' }], bevel: { enabled: true }, satin: { enabled: true } });
-  assert.ok(r.fx.dropShadow.on); assert.deepEqual(r.unsupported, ['bevel & emboss', 'satin']);
+  assert.ok(r.fx.dropShadow.on && r.fx.bevel.on); assert.deepEqual(r.unsupported, ['satin']);
   assert.ok(!F.fromPsdEffects({ disabled: true, dropShadow: [{ enabled: true }] }).fx.dropShadow.on);
 });
 t('PSD effects with FRGB colours and unknown blend modes are tolerated', () => {
   const r = F.fromPsdEffects({ solidFill: [{ enabled: true, color: { fr: 1, fg: 0, fb: 0 }, blendMode: 'vivid light', opacity: 1 }] });
   assert.equal(r.fx.colorOverlay.color, '#ff0000'); assert.equal(r.fx.colorOverlay.blend, 'normal');
+});
+
+// ---- bevel & emboss maths
+const discF = (w, h, cx, cy, r) => { const c = new Float32Array(w * h); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) c[y * w + x] = Math.hypot(x - cx + 0.0, y - cy) <= r ? 1 : 0; return c; };
+const bev = (o = {}) => ({ ...F.defaultFx('bevel'), ...o });
+const shadeOf = (b, w = 100, h = 100, r = 30) => { const cov = discF(w, h, 50, 50, r), H = F.bevelHeight(cov, w, h, b), s = F.bevelShade(H, w, h, b.angle, b.altitude); return { cov, H, ...s }; };
+const mass = (arr, w, h, f) => { let s = 0; for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (f(x, y)) s += arr[y * w + x]; return s; };
+t('blurMap preserves total brightness and flat fields', () => {
+  const w = 40, h = 30, a = new Float32Array(w * h).fill(0.7); const flat = F.blurMap(a, w, h, 4); assert.ok(flat.every((v) => Math.abs(v - 0.7) < 1e-4));
+  const imp = new Float32Array(w * h); imp[15 * w + 20] = 100; const b = F.blurMap(imp, w, h, 3); let s = 0; for (const v of b) s += v; assert.ok(Math.abs(s - 100) < 0.5, `sum ${s}`); assert.ok(b[15 * w + 20] < 20);
+});
+t('inner bevel lit from the upper-left: highlights on the upper-left rim, shadows on the lower-right, nothing in the middle', () => {
+  const { hi, sh } = shadeOf(bev({ size: 8 })), UL = (x, y) => x < 50 && y < 50, LR = (x, y) => x >= 50 && y >= 50;
+  assert.ok(mass(hi, 100, 100, UL) > 8 * mass(hi, 100, 100, LR), 'highlight side'); assert.ok(mass(sh, 100, 100, LR) > 8 * mass(sh, 100, 100, UL), 'shadow side');
+  assert.ok(mass(hi, 100, 100, (x, y) => Math.hypot(x - 50, y - 50) < 18) + mass(sh, 100, 100, (x, y) => Math.hypot(x - 50, y - 50) < 18) < 0.5, 'flat top is unlit');
+  assert.ok(mass(hi, 100, 100, (x, y) => Math.hypot(x - 50, y - 50) > 42) + mass(sh, 100, 100, (x, y) => Math.hypot(x - 50, y - 50) > 42) < 0.5, 'nothing far outside');
+});
+t('direction "down" and the opposite light angle each swap highlight and shadow', () => {
+  const UL = (x, y) => x < 50 && y < 50, base = shadeOf(bev({ size: 8 })), down = shadeOf(bev({ size: 8, direction: 'down' })), opp = shadeOf(bev({ size: 8, angle: 300 }));
+  assert.ok(mass(base.hi, 100, 100, UL) > mass(base.sh, 100, 100, UL)); assert.ok(mass(down.sh, 100, 100, UL) > mass(down.hi, 100, 100, UL)); assert.ok(mass(opp.sh, 100, 100, UL) > mass(opp.hi, 100, 100, UL));
+});
+t('bevel styles put the lighting on the right side of the edge', () => {
+  const inside = (x, y) => Math.hypot(x - 50, y - 50) <= 30, tot = (s, f) => mass(s.hi, 100, 100, f) + mass(s.sh, 100, 100, f);
+  const inner = shadeOf(bev({ style: 'inner', size: 10 })), outer = shadeOf(bev({ style: 'outer', size: 10 })), emb = shadeOf(bev({ style: 'emboss', size: 10 })), pil = shadeOf(bev({ style: 'pillow', size: 10 }));
+  assert.ok(tot(inner, inside) > 5 && tot(inner, (x, y) => !inside(x, y)) < 0.25 * tot(inner, inside), 'inner');
+  assert.ok(tot(outer, (x, y) => !inside(x, y)) > 5 && tot(outer, (x, y) => Math.hypot(x - 50, y - 50) < 24) < 0.5, 'outer');
+  assert.ok(tot(emb, inside) > 3 && tot(emb, (x, y) => !inside(x, y)) > 3, 'emboss straddles the edge');
+  assert.ok(tot(pil, inside) > 3 && tot(pil, (x, y) => !inside(x, y)) > 3, 'pillow straddles the edge');
+});
+t('pillow emboss is a groove: the two sides of the edge are lit oppositely', () => {
+  const s = shadeOf(bev({ style: 'pillow', size: 12 })), row = 50, ins = F.bevelHeight(discF(100, 100, 50, 50, 30), 100, 100, bev({ style: 'pillow', size: 12 }));
+  assert.ok(ins[row * 100 + 20] < ins[row * 100 + 8] && ins[row * 100 + 20] < ins[row * 100 + 32], 'height dips at the edge (x=20)'); void s;
+});
+t('size sets the width of the lit band; depth sets its strength', () => {
+  const band = (size) => { const { hi, sh } = shadeOf(bev({ size })); let n = 0; for (let x = 0; x < 50; x++) if (hi[50 * 100 + x] + sh[50 * 100 + x] > 0.05) n++; return n; };
+  assert.ok(band(16) > band(5) + 5, `band widths ${band(5)} vs ${band(16)}`);
+  const strength = (depth) => { const { hi, sh } = shadeOf(bev({ size: 8, depth })); let s = 0; for (let i = 0; i < hi.length; i++) s += hi[i] + sh[i]; return s; };
+  assert.ok(strength(250) > strength(100) && strength(100) > strength(30), 'depth');
+});
+t('regression: raising Depth never weakens the lighting at any pixel (steep faces stay lit, not Lambertian-dark)', () => {
+  const at = (depth) => { const s = shadeOf(bev({ size: 10, depth })); return s.hi.map((v, i) => v + s.sh[i]); };
+  const seq = [10, 30, 100, 300, 800].map(at);
+  for (let k = 1; k < seq.length; k++) for (let i = 0; i < seq[k].length; i++) assert.ok(seq[k][i] >= seq[k - 1][i] - 0.02, `depth step ${k} at pixel ${i}: ${seq[k - 1][i]} -> ${seq[k][i]}`);
+});
+t('chisel hard has a constant slope across the band, smooth eases in and out', () => {
+  const hh = (technique) => F.bevelHeight(discF(120, 120, 60, 60, 50), 120, 120, bev({ technique, size: 20, depth: 100 })), row = 60;
+  const slope = (H, x) => H[row * 120 + x + 1] - H[row * 120 + x - 1];
+  const hard = hh('hard'), smooth = hh('smooth');
+  assert.ok(Math.abs(slope(hard, 20) - slope(hard, 28)) < 0.12 * Math.abs(slope(hard, 24)), `hard ${slope(hard, 20)} ${slope(hard, 24)} ${slope(hard, 28)}`);
+  assert.ok(Math.abs(slope(smooth, 11)) < 0.45 * Math.abs(slope(smooth, 20)), `smooth ${slope(smooth, 11)} vs ${slope(smooth, 20)}`);
+});
+t('light straight overhead (altitude 90°) leaves no highlights', () => {
+  const { hi } = shadeOf(bev({ size: 8, altitude: 90 })); assert.ok(mass(hi, 100, 100, () => true) < 0.5);
+});
+t('stroke emboss needs a stroke; with one, only the stroke is shaded', () => {
+  const w = 100, h = 100, cov = discF(w, h, 50, 50, 30);
+  assert.ok(F.bevelHeight(cov, w, h, bev({ style: 'stroke' }), null).every((v) => v === 0));
+  const ring = F.ringCoverage(cov, w, h, 8, 'inside'), Hh = F.bevelHeight(cov, w, h, bev({ style: 'stroke', size: 6 }), ring), s = F.bevelShade(Hh, w, h, 120, 30);
+  assert.ok(mass(s.hi, w, h, (x, y) => Math.hypot(x - 50, y - 50) < 18) + mass(s.sh, w, h, (x, y) => Math.hypot(x - 50, y - 50) < 18) < 0.5); assert.ok(mass(s.hi, w, h, (x, y) => x < 50 && y < 50) > 2);
+});
+t('bevel survives a PSD conversion round-trip (all styles and techniques)', () => {
+  for (const style of ['inner', 'outer', 'emboss', 'pillow', 'stroke']) for (const technique of ['smooth', 'hard', 'soft']) {
+    const fx = { bevel: bev({ style, technique, depth: 240, direction: 'down', size: 9, soften: 2, angle: 75, altitude: 55, hiColor: '#ffeecc', hiBlend: 'screen', hiOpacity: 0.6, shColor: '#001122', shBlend: 'multiply', shOpacity: 0.9 }) };
+    const back = F.fromPsdEffects(F.toPsdEffects(fx)); assert.deepEqual(back.fx, fx); assert.deepEqual(back.unsupported, []);
+  }
+});
+t('bevel textures / gloss contours in PSDs are reported, the bevel itself is kept', () => {
+  const r = F.fromPsdEffects({ bevel: { enabled: true, style: 'inner bevel', size: { units: 'Pixels', value: 7 }, useTexture: true, contour: { name: 'Ring', curve: [] } } });
+  assert.ok(r.fx.bevel.on && r.fx.bevel.size === 7); assert.deepEqual(r.unsupported, ['bevel texture', 'bevel gloss contour']);
 });
 
 // ---- content-aware fill (async: tests are queued and awaited below)

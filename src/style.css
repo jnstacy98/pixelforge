@@ -109,3 +109,5 @@ input[type=range] { accent-color: var(--accent); }
 
 .caf-overlay { position: fixed; inset: 0; z-index: 400; background: #000a; display: grid; place-content: center; justify-items: center; gap: 14px; font-size: 14px; }
 .caf-bar { width: 320px; height: 8px; background: #333; border-radius: 4px; overflow: hidden; } .caf-bar > div { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+
+.fx-panel .fx-body { max-height: 70vh; } .fx-controls { overflow-y: auto; max-height: calc(70vh - 20px); }

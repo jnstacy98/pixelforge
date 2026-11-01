@@ -1,5 +1,5 @@
 import { blendOp, ctxOf, makeCanvas, type Rect } from './doc';
-import { fxMargin, gradientEnds, growCoverage, hexToRgb, ringCoverage, shadowOffset, softEdge, type LayerEffects } from './fx';
+import { bevelHeight, bevelShade, fxMargin, gradientEnds, growCoverage, hexToRgb, ringCoverage, shadowOffset, softEdge, type LayerEffects } from './fx';
 
 function alphaBox(c: HTMLCanvasElement): Rect | null {
   const { width: w, height: h } = c, d = ctxOf(c).getImageData(0, 0, w, h).data;
@@ -69,8 +69,21 @@ export function renderStyled(shape: HTMLCanvasElement, fx: LayerEffects, fill: n
   if (ig?.on) put(clip(soft(B, w, h, ig.color, ig.size, ig.spread), 'destination-in'), ig.opacity, ig.blend);
   const is = fx.innerShadow;
   if (is?.on) { const { dx, dy } = shadowOffset(is.angle, is.distance), s = soft(B, w, h, is.color, is.size, is.spread), sh = makeCanvas(w, h); ctxOf(sh).drawImage(s, dx, dy); put(clip(sh, 'destination-in'), is.opacity, is.blend); }
-  const st = fx.stroke;
+  // Bevel & Emboss: light a height map made from the shape's edge (highlights where it faces the light, shadows where it faces away)
+  const bv = fx.bevel, st = fx.stroke;
+  const drawBevel = () => {
+    if (!bv?.on) return;
+    const ring = bv.style === 'stroke' && st?.on ? ringCoverage(A, w, h, st.size, st.position) : null;
+    const { hi, sh } = bevelShade(bevelHeight(A, w, h, bv, ring), w, h, bv.angle, bv.altitude);
+    const region = bv.style === 'inner' ? A : bv.style === 'outer' ? B : bv.style === 'stroke' ? ring : null;      // emboss / pillow shade both sides of the edge
+    if (bv.style === 'stroke' && !ring) return;
+    if (region) for (let p = 0; p < hi.length; p++) { hi[p] *= region[p]; sh[p] *= region[p]; }
+    put(colored(hi, w, h, bv.hiColor), bv.hiOpacity, bv.hiBlend);
+    put(colored(sh, w, h, bv.shColor), bv.shOpacity, bv.shBlend);
+  };
+  if (bv?.style !== 'stroke') drawBevel();
   if (st?.on) put(colored(ringCoverage(A, w, h, st.size, st.position), w, h, st.color), st.opacity, st.blend);
+  if (bv?.style === 'stroke') drawBevel();                                                                             // Stroke Emboss lights the stroke itself, so it goes on top of it
 
   ctxOf(result).drawImage(O, R.x, R.y);
   return result;

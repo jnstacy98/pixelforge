@@ -1255,6 +1255,98 @@ const picked = await page.evaluate(() => window.__app.fg), expect = await page.e
 assert.equal(picked, expect); ok('the eyedropper still picks colours');
 await page.evaluate(() => window.__app.setTool('move'));
 
+
+// 6n. bevel & emboss
+const lum = (c) => 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+const bevelScene = async () => { await styleScene(); await gx(`d.layers[0].ctx.fillStyle = '#969696'; d.layers[0].ctx.fillRect(0, 0, 400, 300); d.emit('structure')`); };
+const GRAY = [150, 150, 150];
+const setBevel = async (patch) => { await gx(`const b = ${G.byName('Box')}; b.effects = { bevel: Object.assign(window.__defaultFx('bevel'), ${JSON.stringify({ size: 12, ...patch })}) }; d.emit('structure')`); await wait(); };
+const bvEdge = async () => ({ left: lum(await cpx(104, 150)), top: lum(await cpx(150, 104)), right: lum(await cpx(196, 150)), bottom: lum(await cpx(150, 196)), mid: lum(await cpx(150, 150)) });
+
+await bevelScene();
+await fxOpen('Bevel'); 
+assert.match(await page.locator('.fx-controls h3').textContent(), /Bevel & Emboss/); ok('Bevel & Emboss is in the fx menu and the Layer Style dialog');
+await fxSet('bevel', { on: true, size: 12, depth: 100, angle: 120, altitude: 30 });
+let bvE = await bvEdge();
+assert.ok(bvE.left > bvE.mid + 8 && bvE.top > bvE.mid + 8, JSON.stringify(bvE)); assert.ok(bvE.right < bvE.mid - 8 && bvE.bottom < bvE.mid - 8, JSON.stringify(bvE)); ok('inner bevel, light from the upper-left: left & top edges are lit, right & bottom edges are shaded');
+assert.ok(near(await cpx(150, 150), RED) && near(await cpx(95, 150), GRAY)); ok('the flat top of the layer and the area outside it are untouched');
+await page.selectOption('.fx-controls select >> nth=0', 'emboss'); await page.waitForTimeout(200);
+assert.equal(await gx(`return ${G.byName('Box')}.effects.bevel.style`), 'emboss'); ok('the dialog\'s controls edit the bevel live (Style → Emboss)');
+await fxOK();
+
+await setBevel({ direction: 'down' }); bvE = await bvEdge();
+assert.ok(bvE.left < bvE.mid - 8 && bvE.right > bvE.mid + 8, JSON.stringify(bvE)); ok('direction "Down" presses the surface in: lighting flips');
+await setBevel({ angle: 300 }); bvE = await bvEdge();
+assert.ok(bvE.left < bvE.mid - 8 && bvE.right > bvE.mid + 8 && bvE.bottom > bvE.mid + 8, JSON.stringify(bvE)); ok('light angle 300° (from the lower-right) flips it the other way');
+
+await setBevel({ style: 'outer' });
+assert.ok(near(await cpx(104, 150), RED) && !near(await cpx(96, 150), GRAY, 6) && !near(await cpx(150, 96), GRAY, 6)); ok('outer bevel shades only outside the layer');
+await setBevel({ style: 'emboss' });
+assert.ok(!near(await cpx(104, 150), RED, 8) && !near(await cpx(96, 150), GRAY, 6)); ok('emboss shades both sides of the edge');
+await setBevel({ style: 'pillow' });
+const pl = [lum(await cpx(106, 150)), lum(await cpx(94, 150)), lum(await cpx(150, 150))];
+assert.ok(!near(await cpx(104, 150), RED, 8) && !near(await cpx(96, 150), GRAY, 6) && near(await cpx(150, 150), RED)); ok('pillow emboss grooves the edge on both sides'); void pl;
+
+// size, depth, altitude, technique
+const bvBand = async (size) => { await setBevel({ size, depth: 100 }); let n = 0; const mid = lum(await cpx(150, 150)); for (let x = 100; x < 150; x += 1) if (Math.abs(lum(await cpx(x, 150)) - mid) > 6) n++; return n; };
+const b4 = await bvBand(4), b20 = await bvBand(20); assert.ok(b20 > b4 + 6, `${b4} vs ${b20}`); ok(`Size sets the width of the lit band (${b4}px → ${b20}px)`);
+const bvStrength = async (depth) => { await setBevel({ size: 12, depth }); const m = await bvEdge(); return Math.abs(m.left - m.mid) + Math.abs(m.right - m.mid); };
+const d30 = await bvStrength(8), d100 = await bvStrength(20), d300 = await bvStrength(45); assert.ok(d300 > d100 && d100 > d30, `${d30} ${d100} ${d300}`); ok('Depth scales how strong the lighting is');
+await setBevel({ altitude: 90 }); bvE = await bvEdge(); assert.ok(bvE.left <= bvE.mid + 2 && bvE.top <= bvE.mid + 2); ok('light from straight overhead produces no highlights');
+await setBevel({ technique: 'smooth', size: 14 }); const bvSm = Math.abs(lum(await cpx(101, 150)) - lum(await cpx(150, 150)));
+await setBevel({ technique: 'hard', size: 14 }); const bvHd = Math.abs(lum(await cpx(101, 150)) - lum(await cpx(150, 150)));
+assert.ok(bvHd > bvSm + 5, `at the rim: smooth ${bvSm} vs chisel hard ${bvHd}`); ok('Chisel Hard is crisp right at the rim; Smooth eases in gently');
+await setBevel({ soften: 0 });
+
+// highlight / shadow controls
+await setBevel({ hiOpacity: 0 }); bvE = await bvEdge(); assert.ok(bvE.left <= bvE.mid + 1 && bvE.right < bvE.mid - 8); ok('highlight opacity 0 removes only the highlight');
+await setBevel({ shOpacity: 0 }); bvE = await bvEdge(); assert.ok(bvE.right >= bvE.mid - 1 && bvE.left > bvE.mid + 8); ok('shadow opacity 0 removes only the shadow');
+await setBevel({ hiColor: '#00ff00', hiOpacity: 1 }); const g1 = await cpx(104, 150); assert.ok(g1[1] - g1[2] > 100); ok('the highlight colour is used (green screen on red)');
+
+// stroke emboss lights only the stroke
+await gx(`${G.byName('Box')}.effects = { stroke: { on: true, color: '#0000ff', opacity: 1, blend: 'normal', size: 8, position: 'inside' }, bevel: Object.assign(window.__defaultFx('bevel'), { style: 'stroke', size: 6 }) }; d.emit('structure')`); await wait();
+const bvLeft = await cpx(103, 150), bvRight = await cpx(197, 150), BLUE = [0, 0, 255];
+assert.ok(near(await cpx(150, 150), RED), 'interior should stay flat red');
+assert.ok(lum(bvLeft) > lum(BLUE) + 8 && lum(bvRight) < lum(BLUE) - 8, `ring should be lit left / shaded right: ${bvLeft} ${bvRight}`); ok('Stroke Emboss lights the stroke (lit on the light side, shaded on the other) and leaves the interior flat');
+await gx(`${G.byName('Box')}.effects.stroke.on = false; d.emit('structure')`);
+assert.ok(near(await cpx(104, 150), RED) && near(await cpx(150, 104), RED)); ok('…and does nothing without a stroke');
+
+// Fill 0 keeps the bevel; bevel on text; stacking with other effects
+await setBevel({ size: 12 }); await gx(`d.setProp(${G.byName('Box')}, 'fillOpacity', 0)`);
+const f0 = [await cpx(150, 150), await cpx(104, 150), await cpx(196, 150)];
+assert.ok(near(f0[0], GRAY) && lum(f0[1]) > lum(GRAY) + 8 && lum(f0[2]) < lum(GRAY) - 8); ok('Fill 0%: the layer pixels vanish but the bevel lighting remains');
+await gx(`d.setProp(${G.byName('Box')}, 'fillOpacity', 1)`);
+await page.evaluate(() => { window.__blank(300, 200); const a = window.__app; a.text.size = 150; a.text.bold = true; a.doc.createTextLayer({ ...a.text, content: 'B', color: '#ffffff', x: 90, y: 20 }); a.doc.setEffects(a.doc.active, { bevel: window.__defaultFx('bevel'), dropShadow: window.__defaultFx('dropShadow') }); });
+await wait();
+const bvShaded = await page.evaluate(() => { const c = document.querySelector('.doccanvas'), x = document.createElement('canvas'); x.width = c.width; x.height = c.height; const t = x.getContext('2d'); t.drawImage(c, 0, 0); const d = t.getImageData(0, 0, x.width, x.height).data; let mid = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 60 && d[i] < 225 && Math.abs(d[i] - d[i + 1]) < 4) mid++; return mid; });
+assert.ok(bvShaded > 150, `shaded pixels ${bvShaded}`); ok('bevel works on text layers together with a drop shadow');
+
+// PSD round-trip
+await page.evaluate(() => {
+  window.__blank(400, 300); const a = window.__app, d = a.doc; d.layers[0].ctx.fillStyle = '#969696'; d.layers[0].ctx.fillRect(0, 0, 400, 300);
+  const mk = (n, x, y, col) => { const l = d.addLayer(n); l.ctx.fillStyle = col; l.ctx.fillRect(x, y, 80, 80); return l; };
+  const A = mk('A', 30, 30, '#e02020'), B2 = mk('B', 160, 30, '#2040e0'), C = mk('C', 290, 30, '#20c040');
+  A.effects = { bevel: { ...window.__defaultFx('bevel'), style: 'emboss', technique: 'hard', depth: 180, size: 9, angle: 60, altitude: 45, hiColor: '#ffeecc', shColor: '#001122', hiOpacity: 0.6, shOpacity: 0.9 }, dropShadow: window.__defaultFx('dropShadow') };
+  B2.effects = { bevel: { ...window.__defaultFx('bevel'), style: 'outer', direction: 'down', soften: 2, size: 14 } };
+  C.effects = { stroke: { ...window.__defaultFx('stroke'), color: '#ffffff', size: 8, position: 'inside' }, bevel: { ...window.__defaultFx('bevel'), style: 'stroke', technique: 'soft', size: 5 } };
+  d.emit('structure');
+});
+await wait();
+const bfr = await page.evaluate(() => window.__fxRoundtrip([[40, 60], [34, 34], [200, 70], [160, 60], [300, 70], [292, 60], [20, 20]]));
+assert.deepEqual(bfr.fxAfter, bfr.fxBefore); assert.deepEqual(bfr.notes, []); ok('PSD round-trip preserves bevel parameters (styles, techniques, colours) alongside other effects');
+for (let i = 0; i < bfr.before.length; i++) assert.ok(near(bfr.after[i], bfr.before[i], 3), `pixel ${i}: ${bfr.before[i]} vs ${bfr.after[i]}`);
+ok('…and the composite with bevels is identical after re-import');
+
+// speed
+const bperf = await page.evaluate(() => {
+  window.__blank(4000, 3000); const a = window.__app, d = a.doc, l = d.addLayer('Small'); l.ctx.fillStyle = '#e02020'; l.ctx.fillRect(1500, 1200, 300, 200);
+  l.effects = { bevel: { ...window.__defaultFx('bevel'), size: 14, style: 'emboss' }, dropShadow: window.__defaultFx('dropShadow') };
+  const c = document.createElement('canvas'); c.width = 4000; c.height = 3000; const cx = c.getContext('2d', { willReadFrequently: true });
+  const t = () => { const t0 = performance.now(); window.__composite(d, cx); return Math.round(performance.now() - t0); };
+  return { first: t(), second: t() };
+});
+assert.ok(bperf.first < 3500 && bperf.second < bperf.first, JSON.stringify(bperf)); ok(`bevel on a 12 MP canvas: first render ${bperf.first} ms, cached ${bperf.second} ms`);
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

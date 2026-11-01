@@ -60,9 +60,14 @@ export function openLayerStyle(layer: Layer = app.doc.active, focus?: FxKind) {
     return [r, n];
   };
   const color = (d: Record<string, unknown>, key: string) => { const c = el('input', { type: 'color', value: d[key] as string }); c.oninput = () => { d[key] = c.value; changed(); }; return [c]; };
-  const blend = (d: Record<string, unknown>) => {
+  const blend = (d: Record<string, unknown>, key = 'blend') => {
     const s = el('select'); s.innerHTML = BLEND_MODES.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
-    s.value = BLEND_MODES.some((m) => m.id === d.blend) ? (d.blend as string) : 'normal'; s.onchange = () => { d.blend = s.value; changed(); };
+    s.value = BLEND_MODES.some((m) => m.id === d[key]) ? (d[key] as string) : 'normal'; s.onchange = () => { d[key] = s.value; changed(); };
+    return [s];
+  };
+  const choice = (d: Record<string, unknown>, key: string, options: [string, string][]) => {
+    const s = el('select'); s.innerHTML = options.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    s.value = d[key] as string; s.onchange = () => { d[key] = s.value; changed(); };
     return [s];
   };
   const common = (d: Record<string, unknown>) => [row('Blend', ...blend(d)), row('Opacity %', ...range(d, 'opacity', 0, 1, 0.01, 100))];
@@ -76,6 +81,15 @@ export function openLayerStyle(layer: Layer = app.doc.active, focus?: FxKind) {
       const rev = el('input', { type: 'checkbox', checked: !!d.reverse }); rev.onchange = () => { d.reverse = rev.checked; changed(); };
       return [...common(d), row('From', ...color(d, 'color1')), row('To', ...color(d, 'color2')), row('Angle °', ...range(d, 'angle', 0, 360)), row('Reverse', rev)] as never;
     },
+    bevel: (d: Record<string, unknown>) => [
+      row('Style', ...choice(d, 'style', [['inner', 'Inner Bevel'], ['outer', 'Outer Bevel'], ['emboss', 'Emboss'], ['pillow', 'Pillow Emboss'], ['stroke', 'Stroke Emboss']])),
+      row('Technique', ...choice(d, 'technique', [['smooth', 'Smooth'], ['hard', 'Chisel Hard'], ['soft', 'Chisel Soft']])),
+      row('Depth %', ...range(d, 'depth', 1, 500)), row('Direction', ...choice(d, 'direction', [['up', 'Up'], ['down', 'Down']])),
+      row('Size', ...range(d, 'size', 0, 100)), row('Soften', ...range(d, 'soften', 0, 16)),
+      row('Angle °', ...range(d, 'angle', 0, 360)), row('Altitude °', ...range(d, 'altitude', 0, 90)),
+      row('Highlight', ...blend(d, 'hiBlend')), row('', ...color(d, 'hiColor')), row('Opacity %', ...range(d, 'hiOpacity', 0, 1, 0.01, 100)),
+      row('Shadow', ...blend(d, 'shBlend')), row('', ...color(d, 'shColor')), row('Opacity %', ...range(d, 'shOpacity', 0, 1, 0.01, 100)),
+    ] as never,
     stroke: (d: Record<string, unknown>) => {
       const pos = el('select'); pos.innerHTML = '<option value="outside">Outside</option><option value="inside">Inside</option><option value="center">Center</option>';
       pos.value = d.position as string; pos.onchange = () => { d.position = pos.value; changed(); };
