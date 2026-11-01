@@ -1,5 +1,7 @@
 import { History } from './history';
 import { renderText, textLabel, type TextData } from './text';
+import { cloneAdjustment, type AdjustmentData } from './adjust';
+import { applyAdjustmentOnto, composite } from './render';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 export type ChangeKind = 'pixels' | 'structure' | 'selection';
@@ -41,14 +43,17 @@ export const blendOp = (id: string): GlobalCompositeOperation =>
   BLEND_MODES.find((b) => b.id === id)?.op ?? 'source-over';
 
 /** Convert a grayscale mask (white = visible) into an alpha-only canvas usable with destination-in. */
-export function grayToAlpha(src: HTMLCanvasElement, dst: HTMLCanvasElement): HTMLCanvasElement {
+export function grayToAlpha(src: HTMLCanvasElement, dst: HTMLCanvasElement, stats?: { full: boolean }): HTMLCanvasElement {
   const w = src.width, h = src.height;
   if (dst.width !== w || dst.height !== h) { dst.width = w; dst.height = h; }
   const img = ctxOf(src).getImageData(0, 0, w, h), d = img.data;
+  let min = 255;
   for (let i = 0; i < d.length; i += 4) {
-    d[i + 3] = ((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8) * d[i + 3] / 255;
+    const a = ((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8) * d[i + 3] / 255;
+    d[i + 3] = a; if (a < min) min = a;
     d[i] = d[i + 1] = d[i + 2] = 0;
   }
+  if (stats) stats.full = min >= 254.5;
   ctxOf(dst).putImageData(img, 0, 0);
   return dst;
 }
@@ -66,14 +71,17 @@ export class Layer {
   editMask = false;
   /** Editable text; the pixels in `canvas` are a raster of this. */
   text: TextData | null = null;
+  /** Non-destructive adjustment applied to everything below this layer (through its mask and opacity). */
+  adjustment: AdjustmentData | null = null;
   /** Set while the text editor overlay is open on this layer. */
   hiddenForEdit = false;
   private alphaCanvas: HTMLCanvasElement | null = null;
   private maskVer = 0;
   private alphaVer = -1;
+  private alphaFull = false;
   constructor(public name: string, public canvas: HTMLCanvasElement) {}
   get ctx() { return ctxOf(this.canvas); }
-  get maskMode() { return !!this.mask && this.editMask; }
+  get maskMode() { return !!this.mask && (this.editMask || !!this.adjustment); }
   /** The canvas that editing tools should draw on. */
   get target() { return this.maskMode ? this.mask! : this.canvas; }
   get tctx() { return ctxOf(this.target); }
@@ -81,11 +89,15 @@ export class Layer {
   maskAlpha(): HTMLCanvasElement {
     if (!this.alphaCanvas) this.alphaCanvas = makeCanvas(this.mask!.width, this.mask!.height);
     if (this.alphaVer !== this.maskVer || this.alphaCanvas.width !== this.mask!.width || this.alphaCanvas.height !== this.mask!.height) {
-      grayToAlpha(this.mask!, this.alphaCanvas);
+      const stats = { full: false };
+      grayToAlpha(this.mask!, this.alphaCanvas, stats);
+      this.alphaFull = stats.full;
       this.alphaVer = this.maskVer;
     }
     return this.alphaCanvas;
   }
+  /** True when the (enabled) mask reveals everything, so it can be ignored when compositing. */
+  maskIsFull(): boolean { this.maskAlpha(); return this.alphaFull; }
 }
 
 /** Layer pixels with the (enabled) mask applied. */
@@ -103,13 +115,14 @@ export function bakedCanvas(l: Layer): HTMLCanvasElement {
 /** An in-progress brush stroke, composited at render time so stroke opacity behaves like Photoshop. */
 export interface Stroke { layer: Layer; canvas: HTMLCanvasElement; opacity: number; erase: boolean; onMask: boolean }
 
-interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null }
+interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; adjustment: AdjustmentData | null }
 const captureLayer = (l: Layer): LayerState => ({
   canvas: cloneCanvas(l.canvas), mask: l.mask && cloneCanvas(l.mask), maskEnabled: l.maskEnabled, editMask: l.editMask, text: l.text && { ...l.text },
+  adjustment: l.adjustment && cloneAdjustment(l.adjustment),
 });
 const restoreLayer = (l: Layer, s: LayerState) => {
   l.canvas = cloneCanvas(s.canvas); l.mask = s.mask && cloneCanvas(s.mask);
-  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.touchMask();
+  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.touchMask();
 };
 
 interface Snapshot { w: number; h: number; items: { layer: Layer; state: LayerState }[] }
@@ -128,6 +141,10 @@ export class Doc {
   view: { zoom: number; panX: number; panY: number } | null = null;
   path: string | null = null;
   private subs = new Set<(k: ChangeKind) => void>();
+  /** Shown to the user when an operation is refused (set by the app). */
+  notice: (msg: string) => void = () => {};
+  /** Messages produced while importing (e.g. unsupported PSD features). */
+  notes: string[] = [];
 
   constructor(public width: number, public height: number, public name = 'Untitled') {}
 
@@ -147,7 +164,7 @@ export class Doc {
   select(layer: Layer) { this.active = layer; this.emit('structure'); }
   /** Choose whether the pixels or the layer mask receive edits. */
   setEditMask(layer: Layer, on: boolean) {
-    layer.editMask = on && !!layer.mask;
+    layer.editMask = (on || !!layer.adjustment) && !!layer.mask;
     if (layer.editMask) layer.maskEnabled = true;
     this.active = layer;
     this.emit('structure');
@@ -174,6 +191,7 @@ export class Doc {
     l.opacity = src.opacity; l.blend = src.blend; l.visible = src.visible;
     if (src.mask) { l.mask = cloneCanvas(src.mask); l.maskEnabled = src.maskEnabled; }
     if (src.text) l.text = { ...src.text };
+    if (src.adjustment) l.adjustment = cloneAdjustment(src.adjustment);
     this.emit('structure');
     return l;
   }
@@ -213,20 +231,54 @@ export class Doc {
     this.emit('structure');
   }
 
+  addAdjustmentLayer(data: AdjustmentData, name: string): Layer {
+    const l = new Layer(name, makeCanvas(this.width, this.height));
+    l.adjustment = cloneAdjustment(data);
+    const m = makeCanvas(this.width, this.height), x = ctxOf(m);
+    x.fillStyle = '#fff'; x.fillRect(0, 0, m.width, m.height);
+    l.mask = m; l.editMask = true;
+    const at = this.layers.indexOf(this.active) + 1, prev = this.active;
+    this.layers.splice(at, 0, l);
+    this.active = l;
+    this.history.push({
+      label: 'New Adjustment Layer',
+      undo: () => { this.layers.splice(this.layers.indexOf(l), 1); this.active = prev; this.emit('structure'); },
+      redo: () => { this.layers.splice(at, 0, l); this.active = l; this.emit('structure'); },
+    });
+    this.emit('structure');
+    return l;
+  }
+  setAdjustment(l: Layer, next: AdjustmentData, before: AdjustmentData | null = l.adjustment) {
+    const a = cloneAdjustment(next), b = before && cloneAdjustment(before);
+    l.adjustment = a;
+    this.history.push({
+      label: 'Edit Adjustment',
+      undo: () => { l.adjustment = b && cloneAdjustment(b); this.emit('structure'); },
+      redo: () => { l.adjustment = cloneAdjustment(a); this.emit('structure'); },
+    });
+    this.emit('structure');
+  }
+
   mergeDown(l = this.active) {
     const i = this.layers.indexOf(l);
     if (i <= 0) return;
     const below = this.layers[i - 1];
+    if (below.adjustment) { this.notice('Cannot merge into an adjustment layer'); return; }
     const belowBefore = captureLayer(below);
     const prevActive = this.active;
     const merged = bakedCanvas(below);           // bake the lower layer's mask first
     below.canvas = merged; below.mask = null; below.editMask = false; below.text = null;
     const bctx = below.ctx;
-    bctx.save();
-    bctx.globalAlpha = l.visible ? l.opacity : 0;
-    bctx.globalCompositeOperation = blendOp(l.blend);
-    bctx.drawImage(bakedCanvas(l), 0, 0);
-    bctx.restore();
+    if (l.adjustment) {
+      // an adjustment merged down is applied to the layer below only
+      if (l.visible) applyAdjustmentOnto(bctx, this.width, this.height, l, l.mask && l.maskEnabled && !l.maskIsFull() ? l.maskAlpha() : null);
+    } else {
+      bctx.save();
+      bctx.globalAlpha = l.visible ? l.opacity : 0;
+      bctx.globalCompositeOperation = blendOp(l.blend);
+      bctx.drawImage(bakedCanvas(l), 0, 0);
+      bctx.restore();
+    }
     const belowAfter = captureLayer(below);
     this.layers.splice(i, 1);
     this.active = below;
@@ -238,13 +290,25 @@ export class Doc {
     this.emit('structure');
   }
 
+  /** Replace all layers with a single layer containing the visible composite (adjustments included). */
   flatten() {
-    while (this.layers.length > 1) this.mergeDown(this.layers[this.layers.length - 1]);
+    if (this.layers.length <= 1 && !this.layers[0]?.adjustment) return;
+    const before = this.layers.slice(), prevActive = this.active;
+    const c = makeCanvas(this.width, this.height);
+    composite(this, ctxOf(c));
+    const flat = new Layer('Background', c);
+    this.layers = [flat]; this.active = flat;
+    this.history.push({
+      label: 'Flatten Image',
+      undo: () => { this.layers = before.slice(); this.active = prevActive; this.emit('structure'); },
+      redo: () => { this.layers = [flat]; this.active = flat; this.emit('structure'); },
+    });
+    this.emit('structure');
   }
 
   // ---- layer masks -----------------------------------------------------------
   addMask(kind: 'reveal' | 'hide' | 'selection', l = this.active) {
-    if (l.mask) return;
+    if (l.mask || l.adjustment) return;
     this.layerEdit(l, 'Add Layer Mask', () => {
       const m = makeCanvas(this.width, this.height), x = ctxOf(m);
       x.fillStyle = kind === 'reveal' ? '#fff' : '#000';
@@ -260,18 +324,18 @@ export class Doc {
     });
   }
   deleteMask(l = this.active) {
-    if (!l.mask) return;
+    if (!l.mask || l.adjustment) return;
     this.layerEdit(l, 'Delete Layer Mask', () => { l.mask = null; l.editMask = false; l.touchMask(); });
   }
   /** Bake the mask into the layer's pixels and remove it. */
   applyMask(l = this.active) {
-    if (!l.mask) return;
+    if (!l.mask || l.adjustment) return;
     this.layerEdit(l, 'Apply Layer Mask', () => { l.canvas = bakedCanvas(l); l.text = null; l.mask = null; l.editMask = false; l.touchMask(); });
   }
   toggleMask(l = this.active) {
     if (!l.mask) return;
     const on = !l.maskEnabled;
-    this.layerEdit(l, on ? 'Enable Layer Mask' : 'Disable Layer Mask', () => { l.maskEnabled = on; if (!on) l.editMask = false; l.touchMask(); });
+    this.layerEdit(l, on ? 'Enable Layer Mask' : 'Disable Layer Mask', () => { l.maskEnabled = on; if (!on && !l.adjustment) l.editMask = false; l.touchMask(); });
   }
 
   // ---- text layers -----------------------------------------------------------

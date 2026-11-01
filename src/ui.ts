@@ -1,6 +1,8 @@
 import { app, type ToolId } from './state';
 import { BLEND_MODES } from './doc';
 import { FONTS } from './text';
+import { editAdjustment, newAdjustmentLayer } from './adjustdialog';
+import { ADJUSTMENT_LABELS, type AdjustmentType } from './adjust';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const svg = (p: string) => `<svg viewBox="0 0 24 24">${p}</svg>`;
@@ -125,7 +127,7 @@ export function initPanels() {
     <div class="lbtns">
       <button id="lnew" title="New layer (Ctrl+Shift+N)">＋</button><button id="ldup" title="Duplicate (Ctrl+J)">⧉</button>
       <button id="lup" title="Move up">▲</button><button id="ldown" title="Move down">▼</button>
-      <button id="lmask" title="Add layer mask (from selection if one exists)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="currentColor"/></svg></button><button id="lmerge" title="Merge down (Ctrl+E)">⤓</button><button id="ldel" title="Delete layer">🗑</button>
+      <button id="ladj" title="New adjustment layer"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor"/></svg></button><button id="lmask" title="Add layer mask (from selection if one exists)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="currentColor"/></svg></button><button id="lmerge" title="Merge down (Ctrl+E)">⤓</button><button id="ldel" title="Delete layer">🗑</button>
     </div>`;
   const sel = $<HTMLSelectElement>('lblend');
   sel.innerHTML = BLEND_MODES.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
@@ -138,6 +140,8 @@ export function initPanels() {
   $('lnew').onclick = () => app.doc.addLayer();
   $('ldup').onclick = () => app.doc.duplicateLayer();
   $('ldel').onclick = () => app.doc.removeLayer();
+  $('ladj').onclick = (e) => popup(e.currentTarget as HTMLElement,
+    (['levels', 'curves', 'brightness', 'hue', 'invert'] as AdjustmentType[]).map((t) => [ADJUSTMENT_LABELS[t] + (t === 'invert' ? '' : '…'), () => newAdjustmentLayer(t)]));
   $('lmask').onclick = () => {
     const d = app.doc;
     if (d.active.mask) return app.toast('Layer already has a mask (Layer ▸ Layer Mask)');
@@ -147,6 +151,22 @@ export function initPanels() {
   $('lup').onclick = () => { const d = app.doc, i = d.layers.indexOf(d.active); d.moveLayer(i, i + 1); };
   $('ldown').onclick = () => { const d = app.doc, i = d.layers.indexOf(d.active); d.moveLayer(i, i - 1); };
   $('historypanel').innerHTML = `<h3>History</h3><div id="hlist"></div>`;
+}
+
+/** Small floating list anchored above a button; closes on any outside click. */
+function popup(anchor: HTMLElement, items: [string, () => void][]) {
+  document.querySelector('.popup')?.remove();
+  const p = document.createElement('div'); p.className = 'popup';
+  const r = anchor.getBoundingClientRect();
+  p.style.left = `${r.left}px`; p.style.bottom = `${innerHeight - r.top + 4}px`;
+  const off = (e: Event) => { if (!p.contains(e.target as Node)) { p.remove(); document.removeEventListener('pointerdown', off, true); } };
+  for (const [label, fn] of items) {
+    const row = document.createElement('div'); row.className = 'mi'; row.textContent = label;
+    row.onclick = () => { p.remove(); document.removeEventListener('pointerdown', off, true); fn(); };
+    p.append(row);
+  }
+  document.body.append(p);
+  document.addEventListener('pointerdown', off, true);
 }
 
 function thumb(src: HTMLCanvasElement) {
@@ -166,13 +186,21 @@ export function renderLayers() {
     row.draggable = true;
     const eye = document.createElement('span'); eye.className = 'eye' + (l.visible ? '' : ' off'); eye.textContent = '👁';
     eye.onclick = (e) => { e.stopPropagation(); doc.setProp(l, 'visible', !l.visible); };
-    const pix = thumb(l.canvas); pix.classList.add('lthumb');
-    pix.classList.toggle('target', l === doc.active && !l.maskMode);
-    pix.onclick = () => doc.setEditMask(l, false);
-    const parts: HTMLElement[] = [eye, pix];
+    const parts: HTMLElement[] = [eye];
+    if (l.adjustment) {
+      const icon = document.createElement('div'); icon.className = 'adjicon'; icon.title = `${ADJUSTMENT_LABELS[l.adjustment.type]} — double-click to edit`;
+      icon.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor"/></svg>';
+      icon.ondblclick = (e) => { e.stopPropagation(); editAdjustment(l); };
+      parts.push(icon);
+    } else {
+      const pix = thumb(l.canvas); pix.classList.add('lthumb');
+      pix.classList.toggle('target', l === doc.active && !l.maskMode);
+      pix.onclick = () => doc.setEditMask(l, false);
+      parts.push(pix);
+    }
     if (l.mask) {
       const m = thumb(l.mask); m.classList.add('mthumb');
-      m.classList.toggle('target', l === doc.active && l.maskMode); m.classList.toggle('off', !l.maskEnabled);
+      m.classList.toggle('target', l === doc.active && l.maskMode && !l.adjustment); m.classList.toggle('off', !l.maskEnabled);
       m.title = 'Layer mask — click to edit, Shift+click to enable/disable';
       m.onclick = (e) => { e.stopPropagation(); if (e.shiftKey) { doc.select(l); doc.toggleMask(l); } else doc.setEditMask(l, true); };
       parts.push(m);
@@ -196,6 +224,7 @@ export function renderLayers() {
   $<HTMLInputElement>('lop').value = String(Math.round(a.opacity * 100));
   $('lopv').textContent = Math.round(a.opacity * 100) + '%';
   $<HTMLSelectElement>('lblend').value = BLEND_MODES.some((m) => m.id === a.blend) ? a.blend : 'normal';
+  $<HTMLSelectElement>('lblend').disabled = !!a.adjustment;
 }
 
 // ---------------------------------------------------------------- tabs & status

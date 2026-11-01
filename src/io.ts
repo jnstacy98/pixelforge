@@ -1,6 +1,7 @@
 import { readPsd, writePsd, type Layer as PsdLayer, type Psd } from 'ag-psd';
 import { Doc, Layer, makeCanvas, ctxOf } from './doc';
 import { flatten } from './render';
+import { fromPsdAdjustment, toPsdAdjustment } from './psdadjust.ts';
 
 export type ExportFormat = 'png' | 'jpeg' | 'webp' | 'bmp' | 'psd';
 export const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'ico', 'svg'];
@@ -79,6 +80,17 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
         mx.drawImage(c.mask.canvas, (c.mask.left ?? 0) + rel, (c.mask.top ?? 0) + relY);
         l.mask = m; l.maskEnabled = !c.mask.disabled;
       }
+      if (c.adjustment) {
+        const a = fromPsdAdjustment(c.adjustment);
+        if (a) {
+          l.adjustment = a;
+          if (!l.mask) { const m = makeCanvas(psd.width, psd.height), mx = ctxOf(m); mx.fillStyle = '#fff'; mx.fillRect(0, 0, m.width, m.height); l.mask = m; }
+          l.editMask = true; l.blend = 'normal';
+        } else {
+          l.visible = false; l.name = `${l.name} (unsupported ${c.adjustment.type} adjustment)`;
+          doc.notes.push(`"${c.name}" is a ${c.adjustment.type} adjustment layer, which PixelForge can't render yet — kept as a hidden placeholder`);
+        }
+      }
       l.blend = (c.blendMode as string) && (c.blendMode as string) !== 'pass through' ? (c.blendMode as string) : 'normal';
       doc.layers.push(l);
     }
@@ -100,7 +112,8 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
       width: doc.width, height: doc.height,
       canvas: flatten(doc),
       children: doc.layers.map((l) => ({
-        name: l.name, canvas: l.canvas, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible,
+        name: l.name, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible,
+        ...(l.adjustment ? { adjustment: toPsdAdjustment(l.adjustment) } : { canvas: l.canvas }),
         blendMode: l.blend as PsdLayer['blendMode'],
         mask: l.mask ? { canvas: l.mask, left: 0, top: 0, right: doc.width, bottom: doc.height, defaultColor: 0, disabled: !l.maskEnabled } : undefined,
       })),

@@ -1,14 +1,27 @@
 import { app } from './state';
 import { clampRect, cloneCanvas, ctxOf, makeCanvas, pushPixelEdit, type Layer, type Rect, type Doc } from './doc';
 import { clipToSelection } from './selection';
+import { composite } from './render';
 import * as A from './adjust';
 
 let busy = false;
-/** True while a Levels/Curves dialog is open (global shortcuts are suspended). */
+/** True while an adjustment dialog is open (global shortcuts are suspended). */
 export const isAdjusting = () => busy;
 
-/** Holds the original pixels of the edit target and renders tone adjustments onto it (live preview + commit). */
-class Session {
+/** What a dialog builds: UI element plus how to read its current settings. */
+interface UI { el: HTMLElement; luts: () => A.RGBLUTs; state: () => A.AdjustmentData | null; reset: () => void }
+
+/** Where an adjustment dialog's result goes: straight into pixels, or into an adjustment layer's parameters. */
+interface Sess {
+  hist(ch: A.Channel): Uint32Array;
+  render(ui: UI): void;
+  restore(): void;
+  ok(ui: UI, label: string): void;
+  cancelled(): void;
+}
+
+/** Destructive mode: holds the original pixels of the edit target and renders tone adjustments onto it. */
+class PixelSession implements Sess {
   doc: Doc = app.doc;
   layer: Layer = app.doc.active;
   orig = cloneCanvas(this.layer.target);
@@ -27,7 +40,8 @@ class Session {
     if (!h) this.hists.set(ch, (h = A.histogramOf(this.src.data, ch)));
     return h;
   }
-  render(l: A.RGBLUTs) {
+  render(ui: UI) {
+    const l = ui.luts();
     A.applyLUTs(this.src.data, this.dst.data, l);
     const ctx = this.layer.tctx, { doc, r } = this;
     if (!doc.selMask) ctx.putImageData(this.dst, r.x, r.y);
@@ -50,7 +64,45 @@ class Session {
     this.layer.touchMask();
     this.doc.emit('pixels');
   }
-  commit(label: string) { pushPixelEdit(this.doc, this.layer, this.orig, this.r, label); }
+  ok(ui: UI, label: string) {
+    if (isIdentity(ui.luts())) return this.restore();
+    this.render(ui);
+    pushPixelEdit(this.doc, this.layer, this.orig, this.r, label);
+  }
+  cancelled() {}
+}
+
+/** Non-destructive mode: edits the parameters of an adjustment layer; the compositor does the rest. */
+class LayerSession implements Sess {
+  doc: Doc = app.doc;
+  before: A.AdjustmentData;
+  private src: ImageData | null = null;
+  private hists = new Map<A.Channel, Uint32Array>();
+  constructor(public layer: Layer, private fresh: boolean) { this.before = A.cloneAdjustment(layer.adjustment!); }
+  /** Histograms describe what the adjustment *receives*: the composite of the layers beneath it. */
+  hist(ch: A.Channel) {
+    if (!this.src) {
+      const below = { width: this.doc.width, height: this.doc.height, layers: this.doc.layers.slice(0, this.doc.layers.indexOf(this.layer)), stroke: null, selMask: null } as unknown as Doc;
+      const c = makeCanvas(this.doc.width, this.doc.height);
+      composite(below, ctxOf(c));
+      this.src = ctxOf(c).getImageData(0, 0, c.width, c.height);
+    }
+    let h = this.hists.get(ch);
+    if (!h) this.hists.set(ch, (h = A.histogramOf(this.src.data, ch)));
+    return h;
+  }
+  render(ui: UI) { this.layer.adjustment = ui.state(); this.doc.emit('pixels'); }
+  restore() { this.layer.adjustment = A.cloneAdjustment(this.before); this.doc.emit('pixels'); }
+  ok(ui: UI) {
+    const next = ui.state()!;
+    this.layer.adjustment = A.cloneAdjustment(this.before);
+    if (!A.sameAdjustment(next, this.before)) this.doc.setAdjustment(this.layer, next, this.before);
+    else this.doc.emit('structure');
+  }
+  cancelled() {
+    // a layer that was just created and then cancelled is removed again
+    if (this.fresh && this.doc.history.undoLabel === 'New Adjustment Layer') this.doc.history.undo();
+  }
 }
 
 const isIdentity = (l: A.RGBLUTs) => [l.r, l.g, l.b].every((t) => t.every((v, i) => v === i));
@@ -79,10 +131,9 @@ const numField = (min: number, max: number, step: number, oninput: (v: number) =
 };
 
 /** Shared floating dialog: live preview checkbox, Reset / Cancel / OK, drag by title, Esc / Enter. */
-function openAdjust(title: string, label: string, build: (s: Session, preview: () => void) => { el: HTMLElement; luts: () => A.RGBLUTs; reset: () => void }) {
+function openAdjust(title: string, label: string, sess: Sess, build: (preview: () => void) => UI) {
   if (busy) return;
   busy = true;
-  const s = new Session();
   const back = el('div', { class: 'adjust-back' });
   const panel = el('div', { class: 'adjust-panel', tabIndex: -1 });
   const head = el('h2', { textContent: title });
@@ -90,19 +141,15 @@ function openAdjust(title: string, label: string, build: (s: Session, preview: (
   let raf = 0;
   const preview = () => {
     if (raf) return;
-    raf = requestAnimationFrame(() => { raf = 0; previewBox.checked ? s.render(ui.luts()) : s.restore(); });
+    raf = requestAnimationFrame(() => { raf = 0; previewBox.checked ? sess.render(ui) : sess.restore(); });
   };
-  const ui = build(s, preview);
+  const ui = build(preview);
   const close = () => { cancelAnimationFrame(raf); back.remove(); busy = false; };
   const cancel = el('button', { textContent: 'Cancel', type: 'button' });
   const ok = el('button', { textContent: 'OK', type: 'button', className: 'primary' });
   const reset = el('button', { textContent: 'Reset', type: 'button' });
-  cancel.onclick = () => { s.restore(); close(); };
-  ok.onclick = () => {
-    const l = ui.luts();
-    if (isIdentity(l)) s.restore(); else { s.render(l); s.commit(label); }
-    close();
-  };
+  cancel.onclick = () => { sess.restore(); close(); sess.cancelled(); };
+  ok.onclick = () => { sess.ok(ui, label); close(); };
   reset.onclick = () => { ui.reset(); preview(); };
   previewBox.onchange = preview;
   panel.onkeydown = (e) => {
@@ -125,9 +172,10 @@ function openAdjust(title: string, label: string, build: (s: Session, preview: (
 }
 
 // ---------------------------------------------------------------- Levels
-export function openLevels() {
-  openAdjust('Levels', 'Levels', (s, preview) => {
-    const P: Record<A.Channel, A.LevelsParams> = { rgb: A.identityLevels(), r: A.identityLevels(), g: A.identityLevels(), b: A.identityLevels() };
+export const openLevels = () => levelsDialog(new PixelSession(), null);
+function levelsDialog(s: Sess, init: A.AdjustmentData | null) {
+  openAdjust('Levels', 'Levels', s, (preview) => {
+    const P: Record<A.Channel, A.LevelsParams> = init?.type === 'levels' ? (A.cloneAdjustment(init) as typeof init).P : { rgb: A.identityLevels(), r: A.identityLevels(), g: A.identityLevels(), b: A.identityLevels() };
     let ch: A.Channel = 'rgb';
     const W = 256, PAD = 8;
     const hist = el('canvas', { width: W + PAD * 2, height: 100 });
@@ -200,7 +248,8 @@ export function openLevels() {
     refresh(); drawAll();
     // test/automation hook
     (body as any).__levels = { P, set: (c: A.Channel, p: Partial<A.LevelsParams>) => { Object.assign(P[c], p); refresh(); } };
-    return { el: body, luts, reset };
+    const state = (): A.AdjustmentData => ({ type: 'levels', P: JSON.parse(JSON.stringify(P)) });
+    return { el: body, luts, state, reset };
   });
 }
 
@@ -214,9 +263,10 @@ const PRESETS: [string, A.CurvePoint[]][] = [
   ['Invert', [{ x: 0, y: 255 }, { x: 255, y: 0 }]],
 ];
 
-export function openCurves() {
-  openAdjust('Curves', 'Curves', (s, preview) => {
-    const P: Record<A.Channel, A.CurvePoint[]> = { rgb: A.identityCurve(), r: A.identityCurve(), g: A.identityCurve(), b: A.identityCurve() };
+export const openCurves = () => curvesDialog(new PixelSession(), null);
+function curvesDialog(s: Sess, init: A.AdjustmentData | null) {
+  openAdjust('Curves', 'Curves', s, (preview) => {
+    const P: Record<A.Channel, A.CurvePoint[]> = init?.type === 'curves' ? (A.cloneAdjustment(init) as typeof init).P : { rgb: A.identityCurve(), r: A.identityCurve(), g: A.identityCurve(), b: A.identityCurve() };
     let ch: A.Channel = 'rgb';
     const PAD = 4, N = 256;
     const cv = el('canvas', { width: N + PAD * 2, height: N + PAD * 2, class: 'curvecanvas' });
@@ -283,14 +333,15 @@ export function openCurves() {
     const reset = () => { for (const c of Object.keys(P) as A.Channel[]) P[c] = A.identityCurve(); draw(); };
     draw();
     (body as any).__curves = { P, set: (c: A.Channel, pts: A.CurvePoint[]) => { P[c] = pts; draw(); preview(); } };
-    return { el: body, luts, reset };
+    const state = (): A.AdjustmentData => ({ type: 'curves', P: JSON.parse(JSON.stringify(P)) });
+    return { el: body, luts, state, reset };
   });
 }
 
 // ---------------------------------------------------------------- Auto Levels (no dialog)
 export function autoLevels() {
   if (busy) return;
-  const s = new Session();
+  const s = new PixelSession();
   const t = (['r', 'g', 'b'] as A.Channel[]).map((c) => {
     const { ib, iw } = A.autoPoints(s.hist(c));
     return A.levelsLUT({ ib, gamma: 1, iw, ob: 0, ow: 255 });
@@ -298,6 +349,53 @@ export function autoLevels() {
   const id = A.levelsLUT(A.identityLevels());
   const luts = A.combineLUTs(id, t[0], t[1], t[2]);
   if (isIdentity(luts)) return app.toast('Auto Levels: nothing to adjust');
-  s.render(luts);
-  s.commit('Auto Levels');
+  s.render({ luts: () => luts } as UI);
+  pushPixelEdit(s.doc, s.layer, s.orig, s.r, 'Auto Levels');
+}
+
+// ---------------------------------------------------------------- slider-based adjustments (layer mode only)
+function slidersDialog(title: string, sess: Sess, defs: { key: string; label: string; min: number; max: number }[], make: (v: Record<string, number>) => A.AdjustmentData, init: Record<string, number>) {
+  openAdjust(title, title, sess, (preview) => {
+    const v: Record<string, number> = { ...init };
+    const outs: Record<string, HTMLInputElement> = {}, ranges: Record<string, HTMLInputElement> = {};
+    const rows = defs.map((d) => {
+      const r = el('input', { type: 'range', min: String(d.min), max: String(d.max), value: String(v[d.key]) });
+      const n = numField(d.min, d.max, 1, (x) => { v[d.key] = x; r.value = String(x); preview(); });
+      n.value = String(v[d.key]);
+      r.oninput = () => { v[d.key] = Number(r.value); n.value = r.value; preview(); };
+      ranges[d.key] = r; outs[d.key] = n;
+      return el('div', { class: 'row' }, el('span', { textContent: d.label, style: 'width:80px' } as any), r, n);
+    });
+    const body = el('div', { class: 'adjust-body' }, ...rows);
+    const identity = A.defaultAdjustment(make(init).type);
+    const reset = () => { for (const d of defs) { v[d.key] = 0; ranges[d.key].value = '0'; outs[d.key].value = '0'; } };
+    (body as any).__sliders = { v, set: (k: string, x: number) => { v[k] = x; ranges[k].value = String(x); outs[k].value = String(x); preview(); } };
+    return { el: body, luts: () => A.lutsFor(identity) ?? { r: new Uint8ClampedArray(256).map((_, i) => i), g: new Uint8ClampedArray(256).map((_, i) => i), b: new Uint8ClampedArray(256).map((_, i) => i) }, state: () => make(v), reset };
+  });
+}
+
+// ---------------------------------------------------------------- adjustment layers
+/** Create a new adjustment layer above the active layer and open its settings (Invert has none). */
+export function newAdjustmentLayer(type: A.AdjustmentType) {
+  if (busy) return;
+  const doc = app.doc;
+  const layer = doc.addAdjustmentLayer(A.defaultAdjustment(type), A.ADJUSTMENT_LABELS[type]);
+  if (type !== 'invert') openFor(layer, true);
+}
+/** Re-open the settings of an existing adjustment layer. */
+export function editAdjustment(layer: Layer) {
+  if (busy || !layer.adjustment || layer.adjustment.type === 'invert') return;
+  app.doc.select(layer);
+  openFor(layer, false);
+}
+function openFor(layer: Layer, fresh: boolean) {
+  const a = layer.adjustment!, s = new LayerSession(layer, fresh);
+  switch (a.type) {
+    case 'levels': return levelsDialog(s, a);
+    case 'curves': return curvesDialog(s, a);
+    case 'brightness':
+      return slidersDialog('Brightness/Contrast', s, [{ key: 'b', label: 'Brightness', min: -100, max: 100 }, { key: 'c', label: 'Contrast', min: -100, max: 100 }], (v) => ({ type: 'brightness', b: v.b, c: v.c }), { b: a.b, c: a.c });
+    case 'hue':
+      return slidersDialog('Hue/Saturation', s, [{ key: 'h', label: 'Hue', min: -180, max: 180 }, { key: 's', label: 'Saturation', min: -100, max: 100 }], (v) => ({ type: 'hue', h: v.h, s: v.s }), { h: a.h, s: a.s });
+  }
 }

@@ -7,8 +7,10 @@ import { importFile, pickFiles, saveAs, OPEN_EXTS, type ExportFormat, type Opene
 import { applyFilter, clearSelection, fillSelection } from './filters';
 import { formDialog } from './dialog';
 import { featherSelection, invertSelection } from './selection';
+import { defaultAdjustment } from './adjust';
+import { composite } from './render';
 import { editor } from './texttool';
-import { autoLevels, isAdjusting, openCurves, openLevels } from './adjustdialog';
+import { autoLevels, editAdjustment, isAdjusting, newAdjustmentLayer, openCurves, openLevels } from './adjustdialog';
 
 // ------------------------------------------------------------------ documents
 function refresh() {
@@ -24,7 +26,11 @@ function switchTo(i: number) {
   app.view.attach(app.doc);
   refresh();
 }
-function addDoc(doc: Doc) { app.docs.push(doc); switchTo(app.docs.length - 1); }
+function addDoc(doc: Doc) {
+  doc.notice = (msg) => app.toast(msg);
+  app.docs.push(doc); switchTo(app.docs.length - 1);
+  if (doc.notes.length) app.toast(doc.notes.join(' · '));
+}
 async function closeDoc(i: number) {
   const d = app.docs[i];
   if (d.history.dirty && !confirm(`"${d.name}" has unsaved changes. Close anyway?`)) return;
@@ -133,6 +139,13 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'New Layer', shortcut: 'Ctrl+Shift+N', action: () => app.doc.addLayer() },
     { label: 'Duplicate Layer', shortcut: 'Ctrl+J', action: () => app.doc.duplicateLayer() },
     { label: 'Delete Layer', action: () => app.doc.removeLayer() },
+    '-',
+    { label: 'New Adjustment Layer — Levels…', action: () => newAdjustmentLayer('levels') },
+    { label: 'New Adjustment Layer — Curves…', action: () => newAdjustmentLayer('curves') },
+    { label: 'New Adjustment Layer — Brightness/Contrast…', action: () => newAdjustmentLayer('brightness') },
+    { label: 'New Adjustment Layer — Hue/Saturation…', action: () => newAdjustmentLayer('hue') },
+    { label: 'New Adjustment Layer — Invert', action: () => newAdjustmentLayer('invert') },
+    ...(app.doc.active.adjustment ? [{ label: 'Edit Adjustment…', action: () => editAdjustment(app.doc.active) }] : []),
     '-',
     { label: 'Add Layer Mask — Reveal All', action: () => app.doc.addMask('reveal') },
     { label: 'Add Layer Mask — Hide All', action: () => app.doc.addMask('hide') },
@@ -288,3 +301,11 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const x = app.doc.selMask!.getContext('2d')!;
   return { edge: x.getImageData(100, 150, 1, 1).data[3], center: x.getImageData(150, 150, 1, 1).data[3] };
 };
+(window as any).__adjRoundtrip = async () => {
+  const { encode, importFile } = await import('./io');
+  const data = await encode(app.doc, 'psd');
+  const d2 = await importFile({ name: 'adj.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
+  return { layers: d2.layers.map((l) => ({ name: l.name, adj: l.adjustment, opacity: l.opacity, visible: l.visible, hasMask: !!l.mask })), notes: d2.notes };
+};
+(window as any).__defaultAdj = defaultAdjustment;
+(window as any).__composite = (d: Doc, ctx: CanvasRenderingContext2D) => composite(d, ctx);

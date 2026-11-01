@@ -321,6 +321,122 @@ await page.keyboard.press('Control+n'); await wait();
 assert.equal(await page.locator('.modal').count(), 0); ok('global shortcuts are suspended while an adjustment dialog is open');
 await page.keyboard.press('Escape'); await wait();
 
+
+// 6e. adjustment layers
+const view = async (x = 10, y = 10) => { await page.waitForTimeout(150); return (await px(x, y)).slice(0, 3); };
+const addAdj = async (label) => { await page.click('#ladj'); await page.click(`.popup .mi:has-text("${label}")`); };
+const adjOf = () => page.evaluate(() => { const l = window.__app.doc.active; return l.adjustment && JSON.parse(JSON.stringify(l.adjustment)); });
+const nLayers = () => page.evaluate(() => window.__app.doc.layers.length);
+const base0 = (x, y) => page.evaluate(([x, y]) => [...window.__app.doc.layers[0].ctx.getImageData(x, y, 1, 1).data], [x, y]);
+
+await newGray([128, 128, 128]);
+await addAdj('Invert'); await wait();
+assert.equal(await nLayers(), 2); assert.equal((await adjOf()).type, 'invert'); ok('adjustment layer created from the Layers panel');
+assert.deepEqual(await view(), [127, 127, 127]); ok('invert adjustment layer changes the composite');
+assert.deepEqual((await base0(10, 10)).slice(0, 3), [128, 128, 128]); ok('…without touching the layer pixels (non-destructive)');
+await page.evaluate(() => { const d = window.__app.doc; d.setProp(d.active, 'visible', false); });
+assert.deepEqual(await view(), [128, 128, 128]); ok('hiding the adjustment layer restores the original look');
+await page.evaluate(() => { const d = window.__app.doc; d.setProp(d.active, 'visible', true); });
+for (let k = 0; k < 3; k++) await page.keyboard.press('Control+z');
+await wait();
+assert.equal(await nLayers(), 1); assert.deepEqual(await view(), [128, 128, 128]); ok('undo removes the adjustment layer');
+await page.keyboard.press('Control+Shift+z'); await wait();
+assert.equal(await nLayers(), 2); assert.deepEqual(await view(), [127, 127, 127]); ok('redo brings it back');
+
+// Levels adjustment layer: preview, OK, re-edit, cancel
+await newGray([128, 128, 128]);
+await addAdj('Levels'); await page.waitForSelector('.adjust-panel');
+await levels('rgb', { gamma: 2 });
+assert.deepEqual(await view(), [181, 181, 181]); ok('Levels adjustment layer: live preview through the compositor');
+assert.deepEqual((await base0(10, 10)).slice(0, 3), [128, 128, 128]);
+await page.click('.adjust-panel button.primary'); await wait();
+assert.deepEqual(await view(), [181, 181, 181]); assert.equal((await adjOf()).P.rgb.gamma, 2);
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Edit Adjustment'); ok('OK commits parameters as one "Edit Adjustment" step');
+await page.dblclick('.layer.active .adjicon'); await page.waitForSelector('.adjust-panel');
+assert.equal(await page.evaluate(() => document.querySelector('.adjust-body').__levels.P.rgb.gamma), 2); ok('double-click re-opens the dialog with the saved settings');
+await levels('rgb', { gamma: 0.5 }); assert.ok((await view())[0] < 100);
+await page.keyboard.press('Escape'); await wait();
+assert.deepEqual(await view(), [181, 181, 181]); assert.equal((await adjOf()).P.rgb.gamma, 2); ok('Cancel on re-edit keeps the previous parameters');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual(await view(), [128, 128, 128]); assert.equal((await adjOf()).P.rgb.gamma, 1); ok('undo reverts the adjustment edit');
+
+// fresh layer + Cancel removes it
+await newGray();
+await addAdj('Curves'); await page.waitForSelector('.curvecanvas');
+assert.equal(await nLayers(), 2);
+await page.keyboard.press('Escape'); await wait();
+assert.equal(await nLayers(), 1); ok('cancelling a brand-new adjustment layer removes it');
+
+// curves adjustment through the dialog
+await newGray();
+await addAdj('Curves'); await page.waitForSelector('.curvecanvas');
+await curves('rgb', [{ x: 0, y: 0 }, { x: 128, y: 200 }, { x: 255, y: 255 }]);
+assert.ok(Math.abs((await view())[0] - 200) <= 2); await page.keyboard.press('Enter'); await wait(); ok('Curves adjustment layer');
+
+// opacity of the adjustment layer scales the effect
+await newGray([100, 100, 100]);
+await addAdj('Invert'); await wait();
+await page.evaluate(() => { const d = window.__app.doc; d.setProp(d.active, 'opacity', 0.5); });
+const half = await view(); assert.ok(Math.abs(half[0] - 127.5) <= 1.5, `got ${half}`); ok('adjustment layer opacity blends original and adjusted');
+await page.evaluate(() => { const d = window.__app.doc; d.setProp(d.active, 'opacity', 1); });
+
+// mask on the adjustment layer limits it; painting targets the mask, not pixels
+await page.evaluate(() => { const d = window.__app.doc; d.setSelection({ x: 0, y: 0, w: 200, h: 300 }); window.__app.setFg('#000000'); });
+await page.keyboard.press('Alt+Backspace'); await wait();
+await page.evaluate(() => window.__app.doc.setSelection(null));
+assert.deepEqual(await view(50, 50), [100, 100, 100]); assert.deepEqual(await view(300, 50), [155, 155, 155]); ok('black on the adjustment mask hides the effect there');
+await page.evaluate(() => { const a = window.__app; a.setFg('#ffffff'); a.brush.size = 40; a.brush.hardness = 1; a.brush.opacity = 1; a.setTool('brush'); });
+await drag([30, 150], [170, 150]); await wait();
+assert.deepEqual(await view(100, 150), [155, 155, 155]); ok('painting white on the mask re-applies the effect');
+const blank = await page.evaluate(() => { const l = window.__app.doc.active; const d = l.canvas.getContext('2d').getImageData(0, 0, 400, 300).data; let n = 0; for (let i = 3; i < d.length; i += 4) n += d[i]; return n; });
+assert.equal(blank, 0); ok('brushing on an adjustment layer never paints pixels');
+await page.evaluate(() => window.__app.setTool('move'));
+
+// duplicate keeps the adjustment; merge down applies it to the layer beneath only
+await page.evaluate(() => window.__app.doc.duplicateLayer());
+assert.equal((await adjOf()).type, 'invert'); ok('duplicate adjustment layer keeps its adjustment');
+await page.evaluate(() => window.__app.doc.removeLayer());
+await page.evaluate(() => window.__app.doc.mergeDown()); await wait();
+assert.equal(await nLayers(), 1); assert.deepEqual((await base0(300, 50)).slice(0, 3), [155, 155, 155]); assert.deepEqual((await base0(50, 50)).slice(0, 3), [100, 100, 100]); ok('merge down bakes the adjustment (through its mask) into the layer below');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await nLayers(), 2); assert.deepEqual((await base0(300, 50)).slice(0, 3), [100, 100, 100]); ok('undo merge restores the adjustment layer');
+
+// cannot merge into an adjustment layer; flatten includes adjustments and is undoable
+await page.evaluate(() => window.__app.doc.addLayer('Top'));
+await page.evaluate(() => { const d = window.__app.doc; d.mergeDown(d.layers[2]); });
+assert.equal(await nLayers(), 3); ok('merging a layer into an adjustment layer is refused');
+await page.evaluate(() => window.__app.doc.flatten()); await wait();
+assert.equal(await nLayers(), 1); assert.deepEqual((await base0(300, 50)).slice(0, 3), [155, 155, 155]); ok('flatten renders adjustment layers into the result');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await nLayers(), 3); assert.ok(await page.evaluate(() => window.__app.doc.layers.some((l) => l.adjustment))); ok('undo flatten restores all layers');
+
+// brightness / hue adjustment layers (CSS-filter based)
+await newGray([100, 100, 100]);
+await addAdj('Brightness'); await page.waitForSelector('.adjust-panel');
+await page.evaluate(() => document.querySelector('.adjust-body').__sliders.set('b', 50));
+assert.ok((await view())[0] > 140); ok('Brightness/Contrast adjustment layer brightens');
+await page.keyboard.press('Enter'); await wait();
+await newGray([200, 60, 60]);
+await addAdj('Hue'); await page.waitForSelector('.adjust-panel');
+await page.evaluate(() => document.querySelector('.adjust-body').__sliders.set('h', 120));
+const hu = await view(); assert.ok(hu[1] > hu[0], `got ${hu}`); ok('Hue/Saturation adjustment layer rotates red toward green');
+await page.keyboard.press('Enter'); await wait();
+
+// PSD round trip keeps editable adjustment layers
+await newGray([90, 120, 200]);
+await page.evaluate(() => {
+  const d = window.__app.doc, A = (t, name, patch) => { const l = d.addAdjustmentLayer(window.__defaultAdj(t), name); patch(l.adjustment); return l; };
+  A('levels', 'Lv', (a) => { a.P.rgb = { ib: 10, gamma: 1.6, iw: 240, ob: 5, ow: 250 }; a.P.b = { ib: 0, gamma: 0.8, iw: 255, ob: 0, ow: 255 }; });
+  const c = A('curves', 'Cv', (a) => { a.P.rgb = [{ x: 0, y: 0 }, { x: 90, y: 140 }, { x: 255, y: 255 }]; }); c.opacity = 0.6;
+  A('invert', 'Inv', () => {}); A('hue', 'Hu', (a) => { a.h = 40; a.s = -20; }); A('brightness', 'Br', (a) => { a.b = 30; a.c = 20; });
+});
+const rt = await page.evaluate(() => window.__adjRoundtrip());
+const by = Object.fromEntries(rt.layers.map((l) => [l.name, l]));
+assert.deepEqual(by.Lv.adj.P.rgb, { ib: 10, gamma: 1.6, iw: 240, ob: 5, ow: 250 }); assert.equal(by.Lv.adj.P.b.gamma, 0.8); ok('PSD round-trip: Levels adjustment layer keeps its parameters');
+assert.deepEqual(by.Cv.adj.P.rgb, [{ x: 0, y: 0 }, { x: 90, y: 140 }, { x: 255, y: 255 }]); assert.ok(Math.abs(by.Cv.opacity - 0.6) < 0.01); ok('PSD round-trip: Curves adjustment layer keeps points and opacity');
+assert.equal(by.Inv.adj.type, 'invert'); assert.deepEqual([by.Hu.adj.h, by.Hu.adj.s], [40, -20]); assert.deepEqual([by.Br.adj.b, by.Br.adj.c], [30, 20]); ok('PSD round-trip: Invert, Hue/Saturation and Brightness/Contrast');
+assert.ok(by.Lv.hasMask); assert.equal(rt.notes.length, 0); ok('PSD round-trip: adjustment layers keep a mask and import without warnings');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

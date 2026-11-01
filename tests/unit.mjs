@@ -80,4 +80,43 @@ t('auto points fall back to identity for flat images', () => {
   const h = new Uint32Array(256); h[100] = 5000;
   assert.deepEqual(A.autoPoints(h), { ib: 0, iw: 255 });
 });
+
+// ---- adjustment-layer data + PSD conversion
+import * as P from '../src/psdadjust.ts';
+t('lutsFor(levels) matches levelsLUT; filter types return null', () => {
+  const a = A.defaultAdjustment('levels'); a.P.rgb.gamma = 2;
+  assert.equal(A.lutsFor(a).r[128], 181);
+  assert.equal(A.lutsFor(A.defaultAdjustment('brightness')), null);
+  assert.match(A.filterFor({ type: 'brightness', b: 20, c: -10 }), /brightness\(1\.2\) contrast\(0\.9\)/);
+  assert.match(A.filterFor({ type: 'hue', h: 30, s: -50 }), /hue-rotate\(30deg\) saturate\(0\.5\)/);
+});
+t('invert adjustment inverts', () => { const l = A.lutsFor({ type: 'invert' }); assert.equal(l.g[0], 255); assert.equal(l.b[255], 0); });
+t('defaultAdjustment/clone/same', () => {
+  const a = A.defaultAdjustment('curves'); const b = A.cloneAdjustment(a);
+  assert.ok(A.sameAdjustment(a, b)); b.P.r.push({ x: 100, y: 120 }); assert.ok(!A.sameAdjustment(a, b));
+});
+t('levels survive a PSD round-trip conversion', () => {
+  const a = A.defaultAdjustment('levels'); a.P.rgb = { ib: 12, gamma: 1.4, iw: 230, ob: 5, ow: 250 }; a.P.g = { ib: 0, gamma: 0.8, iw: 255, ob: 0, ow: 255 };
+  const back = P.fromPsdAdjustment(P.toPsdAdjustment(a));
+  assert.deepEqual(back, a);
+});
+t('curves survive a PSD round-trip conversion (identity channels stay identity)', () => {
+  const a = A.defaultAdjustment('curves'); a.P.rgb = [{ x: 0, y: 0 }, { x: 64, y: 90 }, { x: 255, y: 255 }];
+  const psd = P.toPsdAdjustment(a);
+  assert.equal(psd.channels[1].length, 0);
+  assert.deepEqual(P.fromPsdAdjustment(psd), a);
+});
+t('pencil-drawn PSD curves are resampled to control points', () => {
+  const map = Array.from({ length: 256 }, (_, i) => 255 - i);
+  const a = P.fromPsdAdjustment({ type: 'curves', values: [map] });
+  const lut = A.curveLUT(a.P.rgb);
+  assert.ok(Math.abs(lut[100] - 155) <= 2);
+});
+t('brightness/contrast, hue/saturation, invert convert; unsupported types return null', () => {
+  assert.deepEqual(P.fromPsdAdjustment(P.toPsdAdjustment({ type: 'brightness', b: 40, c: 30 })), { type: 'brightness', b: 40, c: 30 });
+  assert.deepEqual(P.fromPsdAdjustment(P.toPsdAdjustment({ type: 'hue', h: -40, s: 25 })), { type: 'hue', h: -40, s: 25 });
+  assert.deepEqual(P.fromPsdAdjustment({ type: 'invert' }), { type: 'invert' });
+  assert.equal(P.fromPsdAdjustment({ type: 'vibrance', vibrance: 20 }), null);
+  assert.equal(P.fromPsdAdjustment({ type: 'selective color' }), null);
+});
 console.log(`\n${n} unit tests passed`);

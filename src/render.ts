@@ -1,4 +1,5 @@
-import { Doc, blendOp, makeCanvas, ctxOf, grayToAlpha, type Stroke } from './doc';
+import { Doc, blendOp, makeCanvas, ctxOf, grayToAlpha, type Layer, type Stroke } from './doc';
+import { applyLUTs, filterFor, lutsFor } from './adjust';
 import { clipToSelection } from './selection';
 
 const scratches: HTMLCanvasElement[] = [];
@@ -21,6 +22,59 @@ function withStroke(dst: HTMLCanvasElement, base: HTMLCanvasElement, s: Stroke) 
   return dst;
 }
 
+/**
+ * Apply an adjustment layer to whatever is already drawn on `ctx`.
+ * result = lerp(below, adjusted(below), k) with k = mask * layer opacity, computed exactly in premultiplied space.
+ */
+export function applyAdjustmentOnto(ctx: CanvasRenderingContext2D, w: number, h: number, layer: Layer, alpha: HTMLCanvasElement | null) {
+  const a = layer.adjustment!;
+  if (!alpha && layer.opacity >= 1) {
+    // Fast path (no mask, full opacity): the result is simply the adjusted pixels, so skip the blend scaffolding.
+    const luts = lutsFor(a);
+    if (luts) {
+      const img = ctx.getImageData(0, 0, w, h);
+      applyLUTs(img.data, img.data, luts);
+      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+      ctx.putImageData(img, 0, 0);
+    } else {
+      const copy = scratch(5, w, h), cx = ctxOf(copy);
+      cx.globalAlpha = 1; cx.globalCompositeOperation = 'source-over'; cx.filter = 'none';
+      cx.clearRect(0, 0, w, h); cx.drawImage(ctx.canvas, 0, 0);
+      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+      ctx.clearRect(0, 0, w, h);
+      ctx.filter = filterFor(a) ?? 'none'; ctx.drawImage(copy, 0, 0); ctx.filter = 'none';
+    }
+    return;
+  }
+  const base = scratch(5, w, h), bx = ctxOf(base);
+  bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over'; bx.filter = 'none';
+  bx.clearRect(0, 0, w, h); bx.drawImage(ctx.canvas, 0, 0);
+  const adj = scratch(6, w, h), ax = ctxOf(adj);
+  ax.globalAlpha = 1; ax.globalCompositeOperation = 'source-over'; ax.filter = 'none';
+  ax.clearRect(0, 0, w, h);
+  const luts = lutsFor(a);
+  if (luts) {
+    ax.drawImage(base, 0, 0);
+    const img = ax.getImageData(0, 0, w, h);
+    applyLUTs(img.data, img.data, luts);
+    ax.putImageData(img, 0, 0);
+  } else {
+    ax.filter = filterFor(a) ?? 'none'; ax.drawImage(base, 0, 0); ax.filter = 'none';
+  }
+  const k = scratch(7, w, h), kx = ctxOf(k);
+  kx.globalCompositeOperation = 'source-over'; kx.clearRect(0, 0, w, h);
+  kx.globalAlpha = layer.opacity;
+  if (alpha) kx.drawImage(alpha, 0, 0); else { kx.fillStyle = '#000'; kx.fillRect(0, 0, w, h); }
+  kx.globalAlpha = 1;
+  bx.globalCompositeOperation = 'destination-out'; bx.drawImage(k, 0, 0);   // below * (1 - k)
+  ax.globalCompositeOperation = 'destination-in'; ax.drawImage(k, 0, 0);    // adjusted * k
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(base, 0, 0);
+  ctx.globalCompositeOperation = 'lighter'; ctx.drawImage(adj, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
 /** Composite all visible layers (plus any live stroke preview) onto ctx. */
 export function composite(doc: Doc, ctx: CanvasRenderingContext2D, includeHidden = false) {
   const { width: w, height: h } = doc;
@@ -28,14 +82,16 @@ export function composite(doc: Doc, ctx: CanvasRenderingContext2D, includeHidden
   ctx.clearRect(0, 0, w, h);
   for (const layer of doc.layers) {
     if ((!layer.visible && !includeHidden) || layer.hiddenForEdit) continue;
-    let src = layer.canvas;
     let live = doc.stroke && doc.stroke.layer === layer ? doc.stroke : null;
     if (live && doc.selMask) live = { ...live, canvas: clipToSelection(doc, live.canvas, scratch(4, w, h)) };
-    if (live && !live.onMask) src = withStroke(scratch(0, w, h), layer.canvas, live);
+    let alpha: HTMLCanvasElement | null = null;
     if (layer.mask && layer.maskEnabled) {
-      const alpha = live?.onMask
-        ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h))
-        : layer.maskAlpha();
+      alpha = live?.onMask ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h)) : layer.maskAlpha();
+    }
+    if (layer.adjustment) { applyAdjustmentOnto(ctx, w, h, layer, alpha && !live?.onMask && layer.maskIsFull() ? null : alpha); continue; }
+    let src = layer.canvas;
+    if (live && !live.onMask) src = withStroke(scratch(0, w, h), layer.canvas, live);
+    if (alpha) {
       const b = scratch(3, w, h), bx = ctxOf(b);
       bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over';
       bx.clearRect(0, 0, w, h);

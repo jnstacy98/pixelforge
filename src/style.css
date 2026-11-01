@@ -82,3 +82,7 @@ input[type=range] { accent-color: var(--accent); }
 .curvecanvas { cursor: crosshair; touch-action: none; }
 .grow { flex: 1; }
 .adjust-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid #1a1a1a; }
+
+.adjicon { width: 40px; height: 32px; display: grid; place-items: center; color: var(--dim); background: var(--bg3); border: 1px solid #000; }
+.layer.active .adjicon { color: #fff; }
+.popup { position: fixed; z-index: 260; min-width: 200px; background: var(--bg2); border: 1px solid #000; box-shadow: 0 8px 24px #0009; padding: 4px 0; }

@@ -96,3 +96,45 @@ export function autoPoints(hist: Uint32Array, clip = 0.005): { ib: number; iw: n
   if (iw - ib < 2) return { ib: 0, iw: 255 };
   return { ib, iw };
 }
+
+// ---------------------------------------------------------------- adjustment-layer data
+export type AdjustmentData =
+  | { type: 'levels'; P: Record<Channel, LevelsParams> }
+  | { type: 'curves'; P: Record<Channel, CurvePoint[]> }
+  | { type: 'invert' }
+  | { type: 'brightness'; b: number; c: number }   // both -100..100
+  | { type: 'hue'; h: number; s: number };         // hue -180..180 deg, saturation -100..100
+export type AdjustmentType = AdjustmentData['type'];
+
+export const ADJUSTMENT_LABELS: Record<AdjustmentType, string> = {
+  levels: 'Levels', curves: 'Curves', invert: 'Invert', brightness: 'Brightness/Contrast', hue: 'Hue/Saturation',
+};
+export const CHANNELS_ALL: Channel[] = ['rgb', 'r', 'g', 'b'];
+
+export function defaultAdjustment(type: AdjustmentType): AdjustmentData {
+  switch (type) {
+    case 'levels': return { type, P: { rgb: identityLevels(), r: identityLevels(), g: identityLevels(), b: identityLevels() } };
+    case 'curves': return { type, P: { rgb: identityCurve(), r: identityCurve(), g: identityCurve(), b: identityCurve() } };
+    case 'invert': return { type };
+    case 'brightness': return { type, b: 0, c: 0 };
+    case 'hue': return { type, h: 0, s: 0 };
+  }
+}
+export const cloneAdjustment = (a: AdjustmentData): AdjustmentData => JSON.parse(JSON.stringify(a));
+export const sameAdjustment = (a: AdjustmentData, b: AdjustmentData) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Per-channel tables for LUT-based adjustments; null for ones rendered with a CSS filter. */
+export function lutsFor(a: AdjustmentData): RGBLUTs | null {
+  switch (a.type) {
+    case 'levels': return combineLUTs(levelsLUT(a.P.rgb), levelsLUT(a.P.r), levelsLUT(a.P.g), levelsLUT(a.P.b));
+    case 'curves': return combineLUTs(curveLUT(a.P.rgb), curveLUT(a.P.r), curveLUT(a.P.g), curveLUT(a.P.b));
+    case 'invert': { const t = new Uint8ClampedArray(256).map((_, i) => 255 - i); return { r: t, g: t, b: t }; }
+    default: return null;
+  }
+}
+/** CSS filter for filter-based adjustments. */
+export function filterFor(a: AdjustmentData): string | null {
+  if (a.type === 'brightness') return `brightness(${1 + a.b / 100}) contrast(${1 + a.c / 100})`;
+  if (a.type === 'hue') return `hue-rotate(${a.h}deg) saturate(${Math.max(0, 1 + a.s / 100)})`;
+  return null;
+}
