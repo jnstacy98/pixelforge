@@ -2,7 +2,7 @@ import type { Doc } from './doc';
 import { FONTS } from './text';
 import type { Viewer } from './viewer';
 
-export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand';
+export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand' | 'clone';
 
 type Evt = 'tool' | 'color' | 'doc' | 'options' | 'history' | 'textstyle' | 'textsync';
 
@@ -16,6 +16,8 @@ class App {
   brush = { size: 24, hardness: 0.7, opacity: 1, flow: 1, spacing: 0.12 };
   fill = { tolerance: 32, contiguous: true };
   text = { font: FONTS[0][1], size: 48, bold: false, italic: false, align: 'left' as 'left' | 'center' | 'right' };
+  /** Clone Stamp: source point (Alt+click), the dest→source offset, and sampling options. */
+  clone = { src: null as { x: number; y: number } | null, offset: null as { x: number; y: number } | null, doc: null as Doc | null, w: 0, h: 0, aligned: true, sample: 'layer' as 'layer' | 'below' | 'all' };
   marquee = { shape: 'rect' as 'rect' | 'ellipse' };
   wand = { allLayers: false };
   gradient = { mode: 'fg-bg' as 'fg-bg' | 'fg-transparent' };

@@ -437,6 +437,87 @@ assert.deepEqual(by.Cv.adj.P.rgb, [{ x: 0, y: 0 }, { x: 90, y: 140 }, { x: 255, 
 assert.equal(by.Inv.adj.type, 'invert'); assert.deepEqual([by.Hu.adj.h, by.Hu.adj.s], [40, -20]); assert.deepEqual([by.Br.adj.b, by.Br.adj.c], [30, 20]); ok('PSD round-trip: Invert, Hue/Saturation and Brightness/Contrast');
 assert.ok(by.Lv.hasMask); assert.equal(rt.notes.length, 0); ok('PSD round-trip: adjustment layers keep a mask and import without warnings');
 
+
+// 6f. clone stamp
+const cl = async (fn) => page.evaluate(fn);
+const CS = { x: 40, y: 40 };  // red square 50..100 / 50..100 on a white layer
+const setupClone = async () => {
+  await page.evaluate(() => {
+    window.__blank(400, 300); const a = window.__app, d = a.doc, x = d.active.ctx;
+    x.fillStyle = '#fff'; x.fillRect(0, 0, 400, 300); x.fillStyle = '#e02020'; x.fillRect(50, 50, 50, 50);
+    // a distinctive 2-colour source so offsets can be verified exactly
+    x.fillStyle = '#2040e0'; x.fillRect(75, 50, 25, 50); d.emit('structure');
+    a.brush.size = 40; a.brush.hardness = 1; a.brush.opacity = 1; a.brush.flow = 1; a.brush.spacing = 0.1;
+    a.clone.aligned = true; a.clone.sample = 'layer'; a.clone.src = null; a.clone.offset = null; a.setTool('clone');
+  });
+  await wait();
+};
+const L = (x, y) => page.evaluate(([x, y]) => [...window.__app.doc.active.ctx.getImageData(x, y, 1, 1).data], [x, y]);
+const altClick = async (x, y) => { const q = await toScreen(x, y); await page.keyboard.down('Alt'); await page.mouse.click(q.x, q.y); await page.keyboard.up('Alt'); await wait(); };
+
+await setupClone();
+// painting without a source does nothing and warns
+await drag([250, 150], [280, 150]); await wait();
+assert.deepEqual((await L(265, 150)).slice(0, 4), [255, 255, 255, 255]); ok('clone stamp without a source paints nothing');
+assert.match(await page.evaluate(() => document.getElementById('toast').textContent), /Alt\+click/); ok('…and tells you to Alt+click a source');
+
+// set source at (60,75) (red part), paint at (260,175) => offset (-200,-100)
+await altClick(60, 75);
+assert.deepEqual(await page.evaluate(() => window.__app.clone.src), { x: 60, y: 75 }); ok('Alt+click sets the clone source');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel === 'Clone Stamp'), false); ok('setting the source does not create a history step');
+await drag([260, 175], [300, 175]); await wait();
+// dest (260,175) <- source (60,75) red ; dest (290,175) <- source (90,75) blue
+assert.deepEqual((await L(260, 175)).slice(0, 3), [224, 32, 32]); ok('clone copies source pixels to the painted position (red)');
+assert.deepEqual((await L(290, 175)).slice(0, 3), [32, 64, 224]); ok('the source→destination offset is preserved along the stroke (blue)');
+assert.deepEqual((await L(260, 215)).slice(0, 4), [255, 255, 255, 255]); ok('pixels outside the brush are untouched');
+assert.deepEqual((await L(60, 75)).slice(0, 3), [224, 32, 32]); ok('the source area itself is unchanged');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Clone Stamp'); ok('stroke is one "Clone Stamp" history step');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual((await L(260, 175)).slice(0, 4), [255, 255, 255, 255]); ok('undo removes the cloned stroke');
+
+// aligned vs non-aligned: second stroke 60px lower
+await page.keyboard.press('Control+Shift+z'); await wait();
+await drag([260, 235], [262, 235]); await wait();         // aligned: source = (60,135) => white
+assert.deepEqual((await L(260, 235)).slice(0, 4), [255, 255, 255, 255]); ok('aligned: the offset carries over to the next stroke');
+await page.evaluate(() => { window.__app.clone.aligned = false; });
+await drag([260, 235], [262, 235]); await wait();         // non-aligned: restarts from source (60,75) => red
+assert.deepEqual((await L(260, 235)).slice(0, 3), [224, 32, 32]); ok('non-aligned: every stroke restarts from the source point');
+
+// soft brush feathers the clone edge
+await setupClone();
+await altClick(60, 75);
+await page.evaluate(() => { window.__app.brush.hardness = 0; });
+await drag([260, 175], [261, 175]); await wait();
+const edge = await L(260, 175 + 17), mid = await L(260, 175);
+assert.ok(mid[0] >= 215 && mid[1] <= 60, `mid ${mid}`); assert.ok(edge[1] > 70 && edge[1] < 235, `edge colour ${edge}`); ok('soft brush gives a feathered clone edge');
+
+// sample all layers: clone from the layer below onto a new empty layer
+await setupClone();
+await page.evaluate(() => window.__app.doc.addLayer('Clone target'));
+await altClick(60, 75);
+await drag([260, 175], [262, 175]); await wait();
+assert.equal((await L(260, 175))[3], 0); ok('Sample: Current layer on an empty layer clones nothing');
+await page.evaluate(() => { window.__app.clone.sample = 'all'; });
+await drag([260, 175], [262, 175]); await wait();
+assert.deepEqual((await L(260, 175)).slice(0, 3), [224, 32, 32]); ok('Sample: All layers clones the visible image onto the active layer');
+assert.deepEqual(await page.evaluate(() => [...window.__app.doc.layers[0].ctx.getImageData(260, 175, 1, 1).data]), [255, 255, 255, 255]); ok('…without touching the layer it was sampled from');
+
+// respects an irregular selection
+await setupClone();
+await altClick(60, 75);
+await page.evaluate(() => { const m = document.createElement('canvas'); m.width = 400; m.height = 300; const x = m.getContext('2d'); x.beginPath(); x.arc(270, 175, 15, 0, 7); x.fill(); window.__app.doc.setSelection({ x: 255, y: 160, w: 30, h: 30 }, m); });
+await drag([240, 175], [300, 175]); await wait();
+assert.deepEqual((await L(270, 175)).slice(0, 3), [32, 64, 224]); assert.deepEqual((await L(250, 175)).slice(0, 3), [255, 255, 255]); ok('clone stamp is limited to the selection');
+
+// clone on a layer mask uses the mask's own pixels
+await setupClone();
+await page.evaluate(() => { const d = window.__app.doc; d.addMask('reveal'); const m = d.active.mask.getContext('2d'); m.fillStyle = '#000'; m.fillRect(50, 50, 50, 50); d.active.touchMask(); });
+await altClick(60, 75);
+await drag([260, 175], [262, 175]); await wait();
+const mm = await page.evaluate(() => window.__app.doc.active.mask.getContext('2d').getImageData(260, 175, 1, 1).data[0]);
+assert.equal(mm, 0); ok('clone stamp on a mask copies mask values (black patch)');
+await page.evaluate(() => window.__app.setTool('move'));
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

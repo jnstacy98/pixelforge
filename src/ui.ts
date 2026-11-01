@@ -13,6 +13,7 @@ const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
   { id: 'lasso', key: 'L', label: 'Lasso', icon: svg('<path d="M7 22a5 5 0 01-2-4"/><path d="M3.3 14A6.8 6.8 0 012 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 01-5-1"/><circle cx="5" cy="19" r="2"/>') },
   { id: 'wand', key: 'W', label: 'Magic Wand', icon: svg('<path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8L19 13M15 9h.01M17.8 6.2L19 5M3 21l9-9M12.2 6.2L11 5"/>') },
   { id: 'brush', key: 'B', label: 'Brush', icon: svg('<path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 114.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 00-3-3.02z"/>') },
+  { id: 'clone', key: 'S', label: 'Clone Stamp (Alt+click to set source)', icon: svg('<path d="M5 22h14"/><path d="M19.27 13.73A2.5 2.5 0 0017.5 13h-11A2.5 2.5 0 004 15.5V17a1 1 0 001 1h14a1 1 0 001-1v-1.5c0-.66-.26-1.3-.73-1.77z"/><path d="M14 13V8.5C14 7 15 7 15 5a3 3 0 00-3-3c-1.66 0-3 1-3 3s1 2 1 3.5V13"/>') },
   { id: 'eraser', key: 'E', label: 'Eraser', icon: svg('<path d="M20 20H8l-4.6-4.6a1.4 1.4 0 010-2L13 3.8a1.4 1.4 0 012 0l5.6 5.6a1.4 1.4 0 010 2L11 21"/><path d="M7 11l6 6"/>') },
   { id: 'bucket', key: 'G', label: 'Paint Bucket', icon: svg('<path d="M19 11l-8-8-8.6 8.6a2 2 0 000 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11z"/><path d="M5 2l5 5M2 13h15"/><path d="M22 20a2 2 0 11-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4z"/>') },
   { id: 'gradient', key: 'D', label: 'Gradient', icon: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 17L17 7" stroke-dasharray="1 3"/>') },
@@ -63,6 +64,17 @@ export function renderOptions() {
       slider('Opacity', () => b.opacity, (v) => (b.opacity = v), 0.01, 1, 0.01, pct),
       slider('Flow', () => b.flow, (v) => (b.flow = v), 0.01, 1, 0.01, pct),
       slider('Spacing', () => b.spacing, (v) => (b.spacing = v), 0.02, 1, 0.01, pct));
+  } else if (t === 'clone') {
+    el.append(slider('Size', () => b.size, (v) => (b.size = v), 1, 500, 1, (v) => v + 'px'),
+      slider('Hardness', () => b.hardness, (v) => (b.hardness = v), 0, 1, 0.01, pct),
+      slider('Opacity', () => b.opacity, (v) => (b.opacity = v), 0.01, 1, 0.01, pct),
+      slider('Flow', () => b.flow, (v) => (b.flow = v), 0.01, 1, 0.01, pct));
+    const al = document.createElement('label'); const ac = document.createElement('input'); ac.type = 'checkbox'; ac.checked = app.clone.aligned;
+    ac.onchange = () => { app.clone.aligned = ac.checked; app.clone.offset = null; }; al.append(ac, 'Aligned');
+    const sl = document.createElement('label'); const ss = document.createElement('select');
+    ss.innerHTML = '<option value="layer">Current layer</option><option value="below">Current &amp; below</option><option value="all">All layers</option>';
+    ss.value = app.clone.sample; ss.onchange = () => (app.clone.sample = ss.value as typeof app.clone.sample); sl.append('Sample', ss);
+    el.append(al, sl, hintEl('Alt+click to set the source, then paint'));
   } else if (t === 'bucket') {
     el.append(slider('Tolerance', () => app.fill.tolerance, (v) => (app.fill.tolerance = v), 0, 255),
       slider('Opacity', () => b.opacity, (v) => (b.opacity = v), 0.01, 1, 0.01, pct));

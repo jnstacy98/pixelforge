@@ -4,7 +4,7 @@ import { MarqueeTool, LassoTool, WandTool } from './selecttools';
 import { clipToSelection, selectedFlags } from './selection';
 import { floodSelect } from './flood';
 import { Layer, cloneCanvas, clampRect, ctxOf, makeCanvas, pushPixelEdit, type Rect } from './doc';
-import { flatten } from './render';
+import { composite, flatten } from './render';
 
 export interface Pt { x: number; y: number; pressure: number }
 export interface Tool {
@@ -43,6 +43,7 @@ function getStamp(size: number, hardness: number, color: string) {
 }
 
 let strokeCanvas: HTMLCanvasElement | null = null;
+let cloneBuf: HTMLCanvasElement | null = null;
 
 class PaintTool implements Tool {
   cursor = 'none';
@@ -54,11 +55,14 @@ class PaintTool implements Tool {
   private layer!: Layer;
   private active = false;
   private onMask = false;
-  constructor(private erase: boolean) {}
+  private snap: HTMLCanvasElement | null = null;   // clone source pixels, frozen at stroke start
+  private off = { x: 0, y: 0 };                    // dest → source offset for the current stroke
+  constructor(private erase: boolean, private isClone = false) {}
   /** On a mask the eraser paints the background color instead of removing alpha. */
   private get erasing() { return this.erase && !this.onMask; }
 
-  down(p: Pt) {
+  down(p: Pt, e?: PointerEvent) {
+    if (this.isClone && !this.startClone(p, e)) return;
     const doc = app.doc;
     this.layer = doc.active;
     this.onMask = this.layer.maskMode;
@@ -76,22 +80,80 @@ class PaintTool implements Tool {
     doc.emit('pixels');
   }
 
+  /** Alt+click sets the source; otherwise prepare a clone stroke. Returns false when no stroke should start. */
+  private startClone(p: Pt, e?: PointerEvent): boolean {
+    const c = app.clone, doc = app.doc;
+    if (e?.altKey) {
+      Object.assign(c, { src: { x: Math.round(p.x), y: Math.round(p.y) }, offset: null, doc, w: doc.width, h: doc.height });
+      app.toast('Clone source set — now paint');
+      doc.emit('selection');
+      return false;
+    }
+    if (!c.src || c.doc !== doc || c.w !== doc.width || c.h !== doc.height) { app.toast('Alt+click to set a clone source first'); return false; }
+    if (!c.aligned || !c.offset) c.offset = { x: c.src.x - Math.round(p.x), y: c.src.y - Math.round(p.y) };
+    this.off = c.offset;
+    const layer = doc.active, mode = layer.maskMode ? 'layer' : c.sample;
+    if (mode === 'layer') this.snap = cloneCanvas(layer.target);
+    else {
+      const upTo = mode === 'below' ? doc.layers.indexOf(layer) + 1 : doc.layers.length;
+      const shim = { width: doc.width, height: doc.height, layers: doc.layers.slice(0, upTo), stroke: null, selMask: null } as unknown as typeof doc;
+      this.snap = makeCanvas(doc.width, doc.height);
+      composite(shim, ctxOf(this.snap));
+    }
+    return true;
+  }
+
+  /** A brush-tip-shaped patch of source pixels, positioned on whole pixels so cloning stays sharp. */
+  private cloneStamp(p: Pt, size: number) {
+    const brush = getStamp(Math.max(1, Math.round(size)), app.brush.hardness, '#000000');
+    const d = brush.width;
+    if (!cloneBuf || cloneBuf.width !== d || cloneBuf.height !== d) cloneBuf = makeCanvas(d, d);
+    const x = Math.round(p.x - d / 2), y = Math.round(p.y - d / 2), cx = ctxOf(cloneBuf);
+    cx.globalAlpha = 1; cx.globalCompositeOperation = 'source-over';
+    cx.clearRect(0, 0, d, d);
+    cx.drawImage(this.snap!, x + this.off.x, y + this.off.y, d, d, 0, 0, d, d);
+    cx.globalCompositeOperation = 'destination-in';
+    cx.drawImage(brush, 0, 0);
+    cx.globalCompositeOperation = 'source-over';
+    return { img: cloneBuf, x, y };
+  }
+
   private dab(p: Pt, pressureOn = true) {
     const b = app.brush;
     const size = b.size * (pressureOn && p.pressure > 0 && p.pressure < 1 ? Math.max(0.15, p.pressure) : 1);
-    const color = this.onMask ? grayOf(this.erase ? app.bg : app.fg) : this.erase ? '#000000' : app.fg;
-    const stamp = getStamp(Math.max(1, Math.round(size)), b.hardness, color);
+    let img: HTMLCanvasElement, x: number, y: number;
+    if (this.isClone) ({ img, x, y } = this.cloneStamp(p, size));
+    else {
+      const color = this.onMask ? grayOf(this.erase ? app.bg : app.fg) : this.erase ? '#000000' : app.fg;
+      img = getStamp(Math.max(1, Math.round(size)), b.hardness, color);
+      x = p.x - img.width / 2; y = p.y - img.height / 2;
+    }
     const ctx = ctxOf(strokeCanvas!);
     ctx.globalAlpha = b.flow;
-    ctx.drawImage(stamp, p.x - stamp.width / 2, p.y - stamp.height / 2);
-    const r = stamp.width;
-    const d = { x: p.x - r / 2 - 1, y: p.y - r / 2 - 1, w: r + 2, h: r + 2 };
+    ctx.drawImage(img, x, y);
+    const r = img.width;
+    const d = { x: x - 1, y: y - 1, w: r + 2, h: r + 2 };
     if (!this.dirty) this.dirty = d;
     else {
       const x0 = Math.min(this.dirty.x, d.x), y0 = Math.min(this.dirty.y, d.y);
       const x1 = Math.max(this.dirty.x + this.dirty.w, d.x + d.w), y1 = Math.max(this.dirty.y + this.dirty.h, d.y + d.h);
       this.dirty = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
     }
+  }
+
+  /** Clone Stamp: show where pixels are being sampled from. */
+  overlay(ctx: CanvasRenderingContext2D, ts: (x: number, y: number) => [number, number]) {
+    const c = app.clone;
+    if (!this.isClone || !c.src || c.doc !== app.doc) return;
+    const cur = app.view.cursorDoc;
+    const pos = (c.aligned || this.active) && c.offset && cur ? { x: cur.x + c.offset.x, y: cur.y + c.offset.y } : c.src;
+    const [sx, sy] = ts(pos.x, pos.y), r = Math.max(4, (app.brush.size * app.view.zoom) / 2);
+    ctx.save(); ctx.lineWidth = 1;
+    for (const [col, grow] of [['rgba(0,0,0,.85)', 0], ['rgba(255,255,255,.9)', 1]] as const) {
+      ctx.strokeStyle = col; ctx.beginPath(); ctx.arc(sx, sy, r + grow, 0, Math.PI * 2);
+      ctx.moveTo(sx - 7 - grow, sy); ctx.lineTo(sx + 7 + grow, sy); ctx.moveTo(sx, sy - 7 - grow); ctx.lineTo(sx, sy + 7 + grow); ctx.stroke();
+    }
+    ctx.restore();
   }
 
   move(p: Pt) {
@@ -124,7 +186,8 @@ class PaintTool implements Tool {
     ctx.drawImage(s.canvas, 0, 0);
     ctx.restore();
     doc.stroke = null;
-    pushPixelEdit(doc, this.layer, this.before, this.dirty, this.erase ? 'Eraser' : 'Brush Stroke');
+    pushPixelEdit(doc, this.layer, this.before, this.dirty, this.isClone ? 'Clone Stamp' : this.erase ? 'Eraser' : 'Brush Stroke');
+    this.snap = null;
   }
 }
 
@@ -289,5 +352,5 @@ class HandTool implements Tool { cursor = 'grab'; down() {} move() {} up() {} }
 
 export const tools: Record<ToolId, Tool> = {
   move: new MoveTool(), marquee: new MarqueeTool(), brush: new PaintTool(false), eraser: new PaintTool(true),
-  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(),
+  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), clone: new PaintTool(false, true),
 };
