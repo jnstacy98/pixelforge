@@ -1,5 +1,7 @@
-import { Doc, blendOp, buildTree, makeCanvas, ctxOf, grayToAlpha, type Layer, type LayerNode, type Stroke } from './doc';
+import { Doc, bakedCanvas, blendOp, buildTree, makeCanvas, ctxOf, grayToAlpha, type Layer, type LayerNode, type Stroke } from './doc';
 import { applyLUTs, filterFor, lutsFor } from './adjust';
+import { cloneFx, hasEffects } from './fx';
+import { renderStyled } from './fxrender';
 import { clipToSelection } from './selection';
 
 const scratches: HTMLCanvasElement[] = [];
@@ -134,10 +136,32 @@ function drawNode(doc: Doc, node: LayerNode, ctx: CanvasRenderingContext2D, incl
     bx.globalCompositeOperation = 'source-over';
     src = b;
   }
-  ctx.globalAlpha = opacity;
+  let alphaMul = 1;
+  if (hasEffects(layer.effects)) src = styledFor(layer, src, !!live);     // effects + pixels (at fill opacity) in one buffer
+  else alphaMul = layer.fillOpacity;
+  ctx.globalAlpha = opacity * alphaMul;
   ctx.globalCompositeOperation = op;
   ctx.drawImage(src, 0, 0);
   ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+}
+
+/** The styled render of a layer's (masked) pixels, cached until the layer, its mask or its styles change. */
+function styledFor(layer: Layer, shape: HTMLCanvasElement, bypass: boolean): HTMLCanvasElement {
+  const key = `${layer.rev}|${layer.fillOpacity}|${layer.maskEnabled ? 1 : 0}|${shape.width}x${shape.height}|${JSON.stringify(layer.effects)}`;
+  if (!bypass && layer.styled?.key === key) return layer.styled.canvas;
+  const canvas = renderStyled(shape, layer.effects!, layer.fillOpacity);
+  layer.styled = bypass ? layer.styled : { key, canvas };
+  return canvas;
+}
+
+/** A copy of the layer's pixels with its mask and layer styles baked in (used when merging). */
+export function renderedCanvas(l: Layer): HTMLCanvasElement {
+  const baked = bakedCanvas(l);
+  if (hasEffects(l.effects)) return renderStyled(baked, cloneFx(l.effects)!, l.fillOpacity);
+  if (l.fillOpacity >= 1) return baked;
+  const c = makeCanvas(baked.width, baked.height), x = ctxOf(c);
+  x.globalAlpha = l.fillOpacity; x.drawImage(baked, 0, 0);
+  return c;
 }
 
 /**

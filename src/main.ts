@@ -10,6 +10,7 @@ import { featherSelection, invertSelection } from './selection';
 import { defaultAdjustment } from './adjust';
 import { composite } from './render';
 import { editor } from './texttool';
+import { clearStyle, copyStyle, isStyling, openLayerStyle, pasteStyle } from './stylesdialog';
 import { autoLevels, editAdjustment, isAdjusting, newAdjustmentLayer, openCurves, openLevels } from './adjustdialog';
 
 // ------------------------------------------------------------------ documents
@@ -143,6 +144,11 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: app.doc.active.clipped ? 'Release Clipping Mask' : 'Create Clipping Mask', shortcut: 'Ctrl+Alt+G', action: () => app.doc.toggleClip() },
     ...(app.doc.clipStackOf(app.doc.active).length ? [{ label: 'Merge Clipping Mask', action: () => app.doc.mergeClipStack() }] : []),
     '-',
+    { label: 'Layer Style…', action: () => openLayerStyle() },
+    { label: 'Copy Layer Style', action: copyStyle },
+    { label: 'Paste Layer Style', action: pasteStyle },
+    { label: 'Clear Layer Style', action: clearStyle },
+    '-',
     { label: 'New Group', action: () => app.doc.newGroup() },
     { label: 'Group Layers', shortcut: 'Ctrl+G', action: () => app.doc.groupLayers() },
     { label: 'Ungroup Layers', shortcut: 'Ctrl+Shift+G', action: () => app.doc.ungroup(app.doc.active.isGroup ? app.doc.active : app.doc.active.parent ?? app.doc.active) },
@@ -220,7 +226,7 @@ function initMenus() {
 
 // ------------------------------------------------------------------ shortcuts
 window.addEventListener('keydown', (e) => {
-  if (isTyping(e) || isAdjusting()) return;
+  if (isTyping(e) || isAdjusting() || isStyling()) return;
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   const doc = app.doc;
   if (mod && e.altKey && e.code === 'KeyG') { e.preventDefault(); doc.toggleClip(); return; }
@@ -327,4 +333,12 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const clips = (d: Doc) => d.layers.filter((l) => l.clipped).map((l) => l.name);
   const info = (d: Doc) => d.layers.filter((l) => l.isGroup).map((l) => ({ name: l.name, opacity: Math.round(l.opacity * 100) / 100, blend: l.blend, visible: l.visible, hasMask: !!l.mask, collapsed: l.collapsed, parent: l.parent?.name ?? null }));
   return { before: sample(app.doc), after: sample(d2), sigBefore: app.doc.signature(), sigAfter: d2.signature(), groupsBefore: info(app.doc), groupsAfter: info(d2), problems: d2.validate(), clippedBefore: clips(app.doc), clippedAfter: clips(d2) };
+};
+(window as any).__fxRoundtrip = async (pts: [number, number][]) => {
+  const { encode, importFile } = await import('./io');
+  const sample = (d: Doc) => { const c = document.createElement('canvas'); c.width = d.width; c.height = d.height; const x = c.getContext('2d', { willReadFrequently: true })!; composite(d, x); return pts.map(([a, b]) => Array.from(x.getImageData(a, b, 1, 1).data)); };
+  const data = await encode(app.doc, 'psd');
+  const d2 = await importFile({ name: 'fx.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
+  const fx = (d: Doc) => Object.fromEntries(d.layers.map((l) => [l.name, { effects: l.effects, fill: Math.round(l.fillOpacity * 100) / 100 }]));
+  return { before: sample(app.doc), after: sample(d2), fxBefore: fx(app.doc), fxAfter: fx(d2), notes: d2.notes };
 };

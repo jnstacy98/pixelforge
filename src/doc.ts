@@ -1,7 +1,8 @@
 import { History } from './history';
 import { renderText, textLabel, type TextData } from './text';
 import { cloneAdjustment, type AdjustmentData } from './adjust';
-import { applyAdjustmentOnto, composite } from './render';
+import { applyAdjustmentOnto, composite, renderedCanvas } from './render';
+import { cloneFx, type LayerEffects } from './fx';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 export type ChangeKind = 'pixels' | 'structure' | 'selection';
@@ -75,6 +76,13 @@ export class Layer {
   text: TextData | null = null;
   /** Non-destructive adjustment applied to everything below this layer (through its mask and opacity). */
   adjustment: AdjustmentData | null = null;
+  /** Layer styles (drop shadow, stroke, ...). Rendered from the layer's shape at composite time. */
+  effects: LayerEffects | null = null;
+  /** Fill opacity: scales the layer's own pixels but not its effects (Opacity scales both). */
+  fillOpacity = 1;
+  /** Bumped whenever the layer's pixels / mask may have changed; keys the styled-render cache. */
+  rev = 0;
+  styled: { key: string; canvas: HTMLCanvasElement } | null = null;
   /** Set while the text editor overlay is open on this layer. */
   hiddenForEdit = false;
   /** 'group' layers have no pixels of their own: they hold other layers (those whose `parent` is this group). */
@@ -104,7 +112,7 @@ export class Layer {
   /** The canvas that editing tools should draw on. */
   get target() { return this.maskMode ? this.mask! : this.canvas; }
   get tctx() { return ctxOf(this.target); }
-  touchMask() { this.maskVer++; }
+  touchMask() { this.maskVer++; this.rev++; }
   maskAlpha(): HTMLCanvasElement {
     if (!this.alphaCanvas) this.alphaCanvas = makeCanvas(this.mask!.width, this.mask!.height);
     if (this.alphaVer !== this.maskVer || this.alphaCanvas.width !== this.mask!.width || this.alphaCanvas.height !== this.mask!.height) {
@@ -143,14 +151,14 @@ export function buildTree(layers: Layer[]): LayerNode[] {
 /** An in-progress brush stroke, composited at render time so stroke opacity behaves like Photoshop. */
 export interface Stroke { layer: Layer; canvas: HTMLCanvasElement; opacity: number; erase: boolean; onMask: boolean }
 
-interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; adjustment: AdjustmentData | null }
+interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; adjustment: AdjustmentData | null; effects: LayerEffects | null; fillOpacity: number }
 const captureLayer = (l: Layer): LayerState => ({
   canvas: cloneCanvas(l.canvas), mask: l.mask && cloneCanvas(l.mask), maskEnabled: l.maskEnabled, editMask: l.editMask, text: l.text && { ...l.text },
-  adjustment: l.adjustment && cloneAdjustment(l.adjustment),
+  adjustment: l.adjustment && cloneAdjustment(l.adjustment), effects: cloneFx(l.effects), fillOpacity: l.fillOpacity,
 });
 const restoreLayer = (l: Layer, s: LayerState) => {
   l.canvas = cloneCanvas(s.canvas); l.mask = s.mask && cloneCanvas(s.mask);
-  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.touchMask();
+  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.effects = cloneFx(s.effects); l.fillOpacity = s.fillOpacity; l.touchMask();
 };
 
 interface Snapshot { w: number; h: number; items: { layer: Layer; state: LayerState }[] }
@@ -189,7 +197,11 @@ export class Doc {
   }
 
   on(fn: (k: ChangeKind) => void) { this.subs.add(fn); return () => this.subs.delete(fn); }
-  emit(k: ChangeKind) { this.subs.forEach((f) => f(k)); }
+  emit(k: ChangeKind) {
+    // style caches are keyed by `rev`: structural changes may touch any layer, live pixel edits the active one
+    if (k === 'structure') for (const l of this.layers) l.rev++; else if (k === 'pixels' && this.active) this.active.rev++;
+    this.subs.forEach((f) => f(k));
+  }
 
   select(layer: Layer) { this.active = layer; this.emit('structure'); }
   /** Choose whether the pixels or the layer mask receive edits. */
@@ -220,7 +232,7 @@ export class Doc {
     if (src.isGroup) return this.duplicateGroup(src);
     const at = this.layers.indexOf(src) + 1;
     const l = this.addLayer(`${src.name} copy`, cloneCanvas(src.canvas), at);
-    l.parent = src.parent; l.clipped = src.clipped;
+    l.parent = src.parent; l.clipped = src.clipped; l.effects = cloneFx(src.effects); l.fillOpacity = src.fillOpacity;
     l.opacity = src.opacity; l.blend = src.blend; l.visible = src.visible;
     if (src.mask) { l.mask = cloneCanvas(src.mask); l.maskEnabled = src.maskEnabled; }
     if (src.text) l.text = { ...src.text };
@@ -339,7 +351,7 @@ export class Doc {
     const block = this.blockOf(g), map = new Map<Layer, Layer>();
     for (const e of block) {
       const c = e.isGroup ? Layer.group(e.name) : new Layer(e.name, cloneCanvas(e.canvas));
-      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped;
+      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped; c.effects = cloneFx(e.effects); c.fillOpacity = e.fillOpacity;
       if (e.mask) { c.mask = cloneCanvas(e.mask); c.maskEnabled = e.maskEnabled; }
       if (e.text) c.text = { ...e.text };
       if (e.adjustment) c.adjustment = cloneAdjustment(e.adjustment);
@@ -483,6 +495,17 @@ export class Doc {
     this.emit('structure');
     return l;
   }
+  /** Replace a layer's styles (null = none) as one undoable step. */
+  setEffects(l: Layer, next: LayerEffects | null, before: LayerEffects | null = l.effects) {
+    const a = cloneFx(next), b = cloneFx(before);
+    l.effects = a;
+    this.history.push({
+      label: 'Layer Style',
+      undo: () => { l.effects = cloneFx(b); this.emit('structure'); },
+      redo: () => { l.effects = cloneFx(a); this.emit('structure'); },
+    });
+    this.emit('structure');
+  }
   setAdjustment(l: Layer, next: AdjustmentData, before: AdjustmentData | null = l.adjustment) {
     const a = cloneAdjustment(next), b = before && cloneAdjustment(before);
     l.adjustment = a;
@@ -505,14 +528,14 @@ export class Doc {
     if (below.clipped && !l.clipped) { this.notice('Release the clipping mask first (or use Merge Clipping Mask)'); return; }
     const belowBefore = captureLayer(below);
     const prevActive = this.active;
-    const merged = bakedCanvas(below);           // bake the lower layer's mask first
-    below.canvas = merged; below.mask = null; below.editMask = false; below.text = null;
+    const merged = renderedCanvas(below);        // bake the lower layer's mask and styles first
+    below.canvas = merged; below.mask = null; below.editMask = false; below.text = null; below.effects = null; below.fillOpacity = 1;
     const bctx = below.ctx;
     if (l.adjustment) {
       // an adjustment merged down is applied to the layer below only
       if (l.visible) applyAdjustmentOnto(bctx, this.width, this.height, l, l.mask && l.maskEnabled && !l.maskIsFull() ? l.maskAlpha() : null);
     } else {
-      const content = bakedCanvas(l);
+      const content = renderedCanvas(l);
       const base = l.clipped ? this.clipBase(l) : null;
       if (base) {                                   // a clipped layer only contributes where its base has pixels
         const cx = ctxOf(content);
@@ -603,7 +626,7 @@ export class Doc {
     });
   }
 
-  setProp<K extends 'name' | 'visible' | 'opacity' | 'blend'>(l: Layer, key: K, value: Layer[K], oldValue: Layer[K] = l[key]) {
+  setProp<K extends 'name' | 'visible' | 'opacity' | 'blend' | 'fillOpacity'>(l: Layer, key: K, value: Layer[K], oldValue: Layer[K] = l[key]) {
     l[key] = value;
     if (oldValue !== value) {
       this.history.push({

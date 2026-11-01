@@ -183,4 +183,61 @@ t('spot healing picks the candidate whose surroundings match', () => {
   assert.notEqual(best[0], 100); // the offset landing on the bright half must lose
   assert.equal(H.chooseSpotOffset(area, aw, ah, 0, 0, dst, cov, r, [[500, 0]]), null);
 });
+
+// ---- layer-style maths
+import * as F from '../src/fx.ts';
+const sq = (w, h, x0, y0, s) => { const m = new Uint8Array(w * h); for (let y = y0; y < y0 + s; y++) for (let x = x0; x < x0 + s; x++) m[y * w + x] = 1; return m; };
+t('distance transform is exact Euclidean distance', () => {
+  const w = 40, h = 40, m = sq(w, h, 15, 15, 10), d = F.distanceTo(m, w, h);
+  assert.equal(d[20 * w + 20], 0); assert.equal(d[20 * w + 10], 5); assert.equal(d[5 * w + 20], 10);
+  assert.ok(Math.abs(d[10 * w + 10] - Math.hypot(5, 5)) < 1e-4); assert.ok(Math.abs(d[0] - Math.hypot(15, 15)) < 1e-4);
+});
+t('distance transform matches brute force on random shapes', () => {
+  const w = 23, h = 17, m = new Uint8Array(w * h); let s = 7; for (let i = 0; i < m.length; i++) { s = (s * 16807) % 2147483647; m[i] = s % 11 === 0 ? 1 : 0; }
+  const d = F.distanceTo(m, w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let best = 1e9; for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) if (m[yy * w + xx]) best = Math.min(best, Math.hypot(x - xx, y - yy)); assert.ok(Math.abs(d[y * w + x] - best) < 1e-3, `at ${x},${y}`); }
+});
+t('growCoverage dilates by r and leaves the shape intact', () => {
+  const w = 40, h = 40, c = Float32Array.from(sq(w, h, 15, 15, 10)), g = F.growCoverage(c, w, h, 3);
+  assert.equal(g[20 * w + 20], 1); assert.equal(g[20 * w + 14], 1); assert.equal(g[20 * w + 12], 1); assert.equal(g[20 * w + 11], 0); assert.equal(g[20 * w + 10], 0);
+});
+t('stroke rings: outside / inside / center have the right widths', () => {
+  const w = 60, h = 60, c = Float32Array.from(sq(w, h, 20, 20, 20)), row = 30 * w;
+  const o = F.ringCoverage(c, w, h, 4, 'outside'); assert.equal(o[row + 19], 1); assert.equal(o[row + 16], 1); assert.equal(o[row + 15], 0); assert.equal(o[row + 20], 0);
+  const i = F.ringCoverage(c, w, h, 4, 'inside'); assert.equal(i[row + 20], 1); assert.equal(i[row + 23], 1); assert.equal(i[row + 24], 0); assert.equal(i[row + 19], 0);
+  const m = F.ringCoverage(c, w, h, 4, 'center'); assert.equal(m[row + 18], 1); assert.equal(m[row + 21], 1); assert.equal(m[row + 17], 0); assert.equal(m[row + 22], 0);
+});
+t('ring corner of an outside stroke is rounded, not square', () => {
+  const w = 60, h = 60, c = Float32Array.from(sq(w, h, 20, 20, 20)), o = F.ringCoverage(c, w, h, 6, 'outside');
+  assert.equal(o[15 * w + 15], 0);          // diagonal distance 7.07 > 6: the square's corner is rounded off
+  assert.ok(o[17 * w + 17] > 0);
+});
+t('shadow offset follows Photoshop angles', () => {
+  const a = F.shadowOffset(120, 10), b = F.shadowOffset(90, 10), c = F.shadowOffset(0, 10);
+  assert.ok(Math.abs(a.dx - 5) < 1e-9 && Math.abs(a.dy - 8.660254) < 1e-5); assert.ok(Math.abs(b.dx) < 1e-9 && b.dy === 10); assert.ok(c.dx === -10 && Math.abs(c.dy) < 1e-9);
+});
+t('gradient ends: 0° runs left→right, 90° bottom→top, spanning the box', () => {
+  const e0 = F.gradientEnds(10, 20, 100, 50, 0), e90 = F.gradientEnds(10, 20, 100, 50, 90);
+  assert.deepEqual([e0.x0, e0.x1], [10, 110]); assert.ok(Math.abs(e90.y0 - 70) < 1e-9 && Math.abs(e90.y1 - 20) < 1e-9);
+});
+t('fxMargin covers the furthest reach and ignores disabled effects', () => {
+  const e = { dropShadow: { ...F.defaultFx('dropShadow'), distance: 20, size: 10 }, stroke: { ...F.defaultFx('stroke'), on: false, size: 99 } };
+  const m = F.fxMargin(e); assert.ok(m >= 32 && m < 60, `margin ${m}`); assert.ok(F.hasEffects(e)); assert.ok(!F.hasEffects({ stroke: { ...F.defaultFx('stroke'), on: false } })); assert.ok(!F.hasEffects(null));
+});
+t('effects survive a PSD conversion round-trip', () => {
+  const fx = { dropShadow: { on: true, color: '#102030', opacity: 0.6, blend: 'multiply', angle: 135, distance: 12, spread: 20, size: 9 }, innerShadow: { ...F.defaultFx('innerShadow'), size: 4 },
+    outerGlow: { on: true, color: '#ffaa00', opacity: 0.9, blend: 'screen', spread: 10, size: 14 }, innerGlow: { ...F.defaultFx('innerGlow'), on: false }, colorOverlay: { on: true, color: '#00ff88', opacity: 0.5, blend: 'overlay' },
+    gradientOverlay: { on: true, color1: '#112233', color2: '#ffeedd', opacity: 0.8, blend: 'normal', angle: 45, reverse: true }, stroke: { on: true, color: '#ff00ff', opacity: 1, blend: 'normal', size: 6, position: 'center' } };
+  const back = F.fromPsdEffects(F.toPsdEffects(fx));
+  assert.deepEqual(back.fx, fx); assert.deepEqual(back.unsupported, []);
+});
+t('unsupported PSD effects are reported, supported ones kept', () => {
+  const r = F.fromPsdEffects({ dropShadow: [{ enabled: true, size: { units: 'Pixels', value: 5 }, distance: { units: 'Pixels', value: 3 }, color: { r: 0, g: 0, b: 0 }, opacity: 0.5, angle: 120, blendMode: 'multiply' }], bevel: { enabled: true }, satin: { enabled: true } });
+  assert.ok(r.fx.dropShadow.on); assert.deepEqual(r.unsupported, ['bevel & emboss', 'satin']);
+  assert.ok(!F.fromPsdEffects({ disabled: true, dropShadow: [{ enabled: true }] }).fx.dropShadow.on);
+});
+t('PSD effects with FRGB colours and unknown blend modes are tolerated', () => {
+  const r = F.fromPsdEffects({ solidFill: [{ enabled: true, color: { fr: 1, fg: 0, fb: 0 }, blendMode: 'vivid light', opacity: 1 }] });
+  assert.equal(r.fx.colorOverlay.color, '#ff0000'); assert.equal(r.fx.colorOverlay.blend, 'normal');
+});
 console.log(`\n${n} unit tests passed`);

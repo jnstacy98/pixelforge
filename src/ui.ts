@@ -2,6 +2,8 @@ import { app, type ToolId } from './state';
 import { BLEND_MODES, GROUP_BLEND_MODES, type Layer, type LayerNode } from './doc';
 import { FONTS } from './text';
 import { editAdjustment, newAdjustmentLayer } from './adjustdialog';
+import { openLayerStyle } from './stylesdialog';
+import { FX_LABELS, FX_ORDER, hasEffects } from './fx';
 import { ADJUSTMENT_LABELS, type AdjustmentType } from './adjust';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -142,13 +144,14 @@ export function initPanels() {
   $('layerpanel').innerHTML = `<h3>Layers</h3>
     <div class="lprops">
       <span>Opacity</span><input type="range" id="lop" min="0" max="100"><span id="lopv"></span>
+      <span>Fill</span><input type="range" id="lfill" min="0" max="100"><span id="lfillv"></span>
       <span>Blend</span><select id="lblend"></select>
     </div>
     <div id="layerlist"></div>
     <div class="lbtns">
       <button id="lnew" title="New layer (Ctrl+Shift+N)">＋</button><button id="ldup" title="Duplicate (Ctrl+J)">⧉</button><button id="lgroup" title="Group layers (Ctrl+G)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><path d="M3 6.5A1.5 1.5 0 014.5 5H9l2 2.5h8.5A1.5 1.5 0 0121 9v8.5a1.5 1.5 0 01-1.5 1.5h-15A1.5 1.5 0 013 17.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
       <button id="lclip" title="Create / release clipping mask (Ctrl+Alt+G)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><path d="M5 4v10a3 3 0 003 3h10M14 13l4 4-4 4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button id="lup" title="Move up">▲</button><button id="ldown" title="Move down">▼</button>
-      <button id="ladj" title="New adjustment layer"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor"/></svg></button><button id="lmask" title="Add layer mask (from selection if one exists)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="currentColor"/></svg></button><button id="lmerge" title="Merge down (Ctrl+E)">⤓</button><button id="ldel" title="Delete layer">🗑</button>
+      <button id="ladj" title="New adjustment layer"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5a8.5 8.5 0 010 17z" fill="currentColor"/></svg></button><button id="lfx" title="Layer style (drop shadow, stroke, glow...)"><i style="font-weight:700;font-size:12px">fx</i></button><button id="lmask" title="Add layer mask (from selection if one exists)"><svg viewBox="0 0 24 24" width="14" height="14" style="vertical-align:middle"><rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="5" fill="currentColor"/></svg></button><button id="lmerge" title="Merge down (Ctrl+E)">⤓</button><button id="ldel" title="Delete layer">🗑</button>
     </div>`;
   const sel = $<HTMLSelectElement>('lblend');
   const op = $<HTMLInputElement>('lop');
@@ -168,6 +171,15 @@ export function initPanels() {
     d.addMask(d.selection ? 'selection' : 'reveal');
   };
   $('lmerge').onclick = () => app.doc.mergeDown();
+  const fill = $<HTMLInputElement>('lfill');
+  let startFill = 1;
+  fill.onpointerdown = () => (startFill = app.doc.active.fillOpacity);
+  fill.oninput = () => { app.doc.active.fillOpacity = Number(fill.value) / 100; $('lfillv').textContent = fill.value + '%'; app.doc.emit('pixels'); };
+  fill.onchange = () => app.doc.setProp(app.doc.active, 'fillOpacity', Number(fill.value) / 100, startFill);
+  $('lfx').onclick = (e) => popup(e.currentTarget as HTMLElement, [
+    ...[...FX_ORDER].reverse().map((k): [string, () => void] => [FX_LABELS[k] + '…', () => openLayerStyle(app.doc.active, k)]),
+    ['Layer Style…', () => openLayerStyle()],
+  ]);
   $('lgroup').onclick = () => app.doc.groupLayers();
   $('lclip').onclick = () => app.doc.toggleClip();
   $('lup').onclick = () => app.doc.nudgeNode(app.doc.active, 1);
@@ -274,6 +286,11 @@ export function renderLayers() {
       if (src && !doc.moveNode(src, l, zone(e) as 'above' | 'below' | 'inside')) app.toast('Cannot move a group into itself');
     };
     row.append(...parts, name);
+    if (hasEffects(l.effects)) {
+      const fxb = document.createElement('span'); fxb.className = 'fxbadge'; fxb.textContent = 'fx'; fxb.title = 'Layer style — click to edit';
+      fxb.onclick = (e) => { e.stopPropagation(); openLayerStyle(l); };
+      row.append(fxb);
+    }
     shown.push(l);
     list.append(row);
   };
@@ -288,6 +305,8 @@ export function renderLayers() {
   sel.innerHTML = modes.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
   sel.value = modes.some((m) => m.id === a.blend) ? a.blend : 'normal';
   sel.disabled = !!a.adjustment;
+  const fl = $<HTMLInputElement>('lfill');
+  fl.value = String(Math.round(a.fillOpacity * 100)); $('lfillv').textContent = fl.value + '%'; fl.disabled = a.isGroup || !!a.adjustment;
 }
 
 // ---------------------------------------------------------------- tabs & status

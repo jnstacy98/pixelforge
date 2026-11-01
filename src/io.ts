@@ -2,6 +2,7 @@ import { readPsd, writePsd, type Layer as PsdLayer, type Psd } from 'ag-psd';
 import { Doc, Layer, makeCanvas, ctxOf } from './doc';
 import { flatten } from './render';
 import { fromPsdAdjustment, toPsdAdjustment } from './psdadjust.ts';
+import { fromPsdEffects, toPsdEffects } from './fx.ts';
 
 export type ExportFormat = 'png' | 'jpeg' | 'webp' | 'bmp' | 'psd';
 export const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'ico', 'svg'];
@@ -82,6 +83,7 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
         const bm = c.blendMode as string | undefined;
         g.blend = !bm || bm === 'pass through' ? 'pass through' : bm;
         importMask(c, g);
+        if (c.effects && Object.keys(c.effects).some((k) => k !== 'disabled' && k !== 'scale')) doc.notes.push(`group "${g.name}": layer styles on groups aren't supported`);
         walk(c.children, g);
         doc.layers.push(g);
         continue;
@@ -89,7 +91,12 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
       const canvas = makeCanvas(psd.width, psd.height);
       if (c.canvas) ctxOf(canvas).drawImage(c.canvas, c.left ?? 0, c.top ?? 0);
       const l = new Layer(c.name || 'Layer', canvas);
-      l.parent = parent; l.visible = !c.hidden; l.opacity = c.opacity ?? 1; l.clipped = !!c.clipping;
+      l.parent = parent; l.visible = !c.hidden; l.opacity = c.opacity ?? 1; l.clipped = !!c.clipping; l.fillOpacity = c.fillOpacity ?? 1;
+      if (c.effects) {
+        const { fx, unsupported } = fromPsdEffects(c.effects);
+        if (Object.keys(fx).length) l.effects = fx;
+        if (unsupported.length) doc.notes.push(`"${l.name}": ${[...new Set(unsupported)].join(', ')} not supported (skipped)`);
+      }
       importMask(c, l);
       if (c.adjustment) {
         const a = fromPsdAdjustment(c.adjustment);
@@ -126,6 +133,8 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
         const l = n.layer;
         return {
           name: l.name, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible, clipping: l.clipped,
+          ...(!l.isGroup && !l.adjustment ? { fillOpacity: l.fillOpacity } : {}),
+          ...(l.effects ? { effects: toPsdEffects(l.effects) } : {}),
           ...(l.isGroup ? { children: n.children.map(toPsd), opened: !l.collapsed } : l.adjustment ? { adjustment: toPsdAdjustment(l.adjustment) } : { canvas: l.canvas }),
           blendMode: l.blend as PsdLayer['blendMode'],
           mask: l.mask ? { canvas: l.mask, left: 0, top: 0, right: doc.width, bottom: doc.height, defaultColor: 0, disabled: !l.maskEnabled } : undefined,

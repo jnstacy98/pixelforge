@@ -909,6 +909,150 @@ assert.equal(cg.sigAfter, cg.sigBefore); assert.deepEqual(cg.clippedAfter, cg.cl
 for (let i = 0; i < cpts.length; i++) assert.ok(near(cg.after[i], cg.before[i], 2), `pixel ${cpts[i]}: ${cg.before[i]} vs ${cg.after[i]}`);
 ok('…and the composite image is identical after re-import');
 
+
+// 6j. layer styles
+const styleScene = async () => {
+  await page.evaluate(() => {
+    window.__blank(400, 300); const a = window.__app, d = a.doc;
+    d.layers[0].name = 'Base';
+    const B = d.addLayer('Box'); B.ctx.fillStyle = '#e02020'; B.ctx.fillRect(100, 100, 100, 100);
+    d.emit('structure'); a.setTool('move');
+  });
+  await wait();
+};
+const RED = [224, 32, 32], WHITE = [255, 255, 255];
+const fxSet = async (kind, patch) => { await page.evaluate(([k, p]) => document.querySelector('.fx-panel').__fx.set(k, p), [kind, patch]); await page.waitForTimeout(200); };
+const fxOpen = async (label) => { await page.click('#lfx'); await page.click(`.popup .mi:has-text("${label}")`); await page.waitForSelector('.fx-panel'); };
+const fxOK = async () => { await page.click('.fx-panel button.primary'); await wait(); };
+const dark = (c) => 255 - c[0];
+
+await styleScene();
+// hard drop shadow
+await fxOpen('Drop Shadow');
+await fxSet('dropShadow', { on: true, color: '#000000', opacity: 1, blend: 'normal', angle: 90, distance: 20, spread: 0, size: 0 });
+assert.ok(near(await cpx(150, 210), [0, 0, 0]) && near(await cpx(150, 230), WHITE) && near(await cpx(150, 95), WHITE) && near(await cpx(50, 150), WHITE) && near(await cpx(150, 150), RED)); ok('drop shadow: offset by angle & distance, under the layer, nowhere else');
+assert.equal(await gx(`return ${G.byName('Box')}.effects.dropShadow.on`), true); ok('the effect is previewed live on the layer');
+await fxOK();
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Layer Style'); assert.equal(await page.locator('#layerlist .fxbadge').count(), 1); ok('OK commits one "Layer Style" undo step and the panel shows an fx badge');
+
+// soft shadow profile: opaque at the edge, fading to nothing by `size`
+await gx(`${G.byName('Box')}.effects.dropShadow.size = 12; ${G.byName('Box')}.effects.dropShadow.distance = 0; d.emit('structure')`);
+const sA = dark(await cpx(150, 201)), sB = dark(await cpx(150, 206)), sC = dark(await cpx(150, 211)), sD = dark(await cpx(150, 216));
+assert.ok(sA > 200 && sA > sB && sB > sC && sC > sD && sD < 12, `profile ${sA} ${sB} ${sC} ${sD}`); ok(`soft shadow fades smoothly from the edge to nothing (${sA} → ${sB} → ${sC} → ${sD})`);
+
+// fill opacity 0: the pixels vanish, effects stay, and the shadow is knocked out under the layer
+await gx(`${G.byName('Box')}.effects.dropShadow.size = 0; ${G.byName('Box')}.effects.dropShadow.distance = 20; d.setProp(${G.byName('Box')}, 'fillOpacity', 0)`);
+assert.ok(near(await cpx(150, 150), WHITE) && near(await cpx(150, 210), [0, 0, 0])); ok('Fill 0%: layer pixels disappear but the shadow stays (and is knocked out beneath the layer)');
+await gx(`d.setProp(${G.byName('Box')}, 'fillOpacity', 1)`);
+// layer opacity scales effects as well
+await gx(`d.setProp(${G.byName('Box')}, 'opacity', 0.5)`);
+assert.ok(near(await cpx(150, 210), [128, 128, 128], 3)); ok('layer Opacity scales the effects too');
+await gx(`d.setProp(${G.byName('Box')}, 'opacity', 1)`);
+
+// strokes
+await gx(`${G.byName('Box')}.effects = { stroke: { on: true, color: '#0000ff', opacity: 1, blend: 'normal', size: 5, position: 'outside' } }; d.emit('structure')`);
+assert.ok(near(await cpx(95, 150), [0, 0, 255]) && near(await cpx(99, 150), [0, 0, 255]) && near(await cpx(93, 150), WHITE) && near(await cpx(101, 150), RED)); ok('stroke (outside, 5px): exactly 5px wide outside the edge, nothing over the fill');
+assert.ok(near(await cpx(96, 96), WHITE, 255)); const corner = await cpx(95, 95); assert.ok(near(corner, WHITE, 40), `corner ${corner}`); ok('outside stroke has rounded corners');
+await gx(`${G.byName('Box')}.effects.stroke.position = 'inside'; d.emit('structure')`);
+assert.ok(near(await cpx(101, 150), [0, 0, 255]) && near(await cpx(104, 150), [0, 0, 255]) && near(await cpx(106, 150), RED) && near(await cpx(98, 150), WHITE)); ok('stroke (inside) stays within the shape');
+await gx(`${G.byName('Box')}.effects.stroke.position = 'center'; ${G.byName('Box')}.effects.stroke.size = 6; d.emit('structure')`);
+assert.ok(near(await cpx(98, 150), [0, 0, 255]) && near(await cpx(102, 150), [0, 0, 255]) && near(await cpx(95, 150), WHITE) && near(await cpx(106, 150), RED)); ok('stroke (center) straddles the edge');
+
+// overlays
+await gx(`${G.byName('Box')}.effects = { colorOverlay: { on: true, color: '#00ff00', opacity: 1, blend: 'normal' } }; d.emit('structure')`);
+assert.ok(near(await cpx(150, 150), [0, 255, 0]) && near(await cpx(50, 150), WHITE)); ok('color overlay recolours the layer within its shape only');
+await gx(`${G.byName('Box')}.effects.colorOverlay.opacity = 0.5; d.emit('structure')`);
+assert.ok(near(await cpx(150, 150), [112, 143, 16], 3)); ok('color overlay opacity blends with the layer');
+await gx(`${G.byName('Box')}.effects.colorOverlay.opacity = 1; ${G.byName('Box')}.effects.colorOverlay.blend = 'multiply'; ${G.byName('Box')}.effects.colorOverlay.color = '#8080ff'; d.emit('structure')`);
+assert.ok(near(await cpx(150, 150), [112, 16, 32], 4)); ok('color overlay honours its blend mode (Multiply with the layer pixels)');
+await gx(`${G.byName('Box')}.effects = { gradientOverlay: { on: true, color1: '#000000', color2: '#ffffff', opacity: 1, blend: 'normal', angle: 0, reverse: false } }; d.emit('structure')`);
+const gradL = await cpx(103, 150), gradR = await cpx(197, 150); assert.ok(gradL[0] < 30 && gradR[0] > 225); ok('gradient overlay runs across the layer along its angle');
+await gx(`${G.byName('Box')}.effects.gradientOverlay.reverse = true; d.emit('structure')`);
+assert.ok((await cpx(103, 150))[0] > 225 && (await cpx(197, 150))[0] < 30); ok('…and can be reversed');
+
+// glows and inner shadow
+await gx(`${G.byName('Box')}.effects = { outerGlow: { on: true, color: '#ffff00', opacity: 1, blend: 'normal', spread: 0, size: 10 } }; d.emit('structure')`);
+const og1 = await cpx(99, 150), og2 = await cpx(60, 150); assert.ok(og1[2] < 90 && og1[0] > 200 && near(og2, WHITE), `glow ${og1} / ${og2}`); assert.ok(near(await cpx(150, 150), RED)); ok('outer glow hugs the outside edge and fades away');
+await gx(`${G.byName('Box')}.effects = { innerGlow: { on: true, color: '#ffffff', opacity: 1, blend: 'normal', spread: 0, size: 20 } }; d.emit('structure')`);
+const ig1 = await cpx(101, 150), ig2 = await cpx(150, 150); assert.ok(ig1[1] > 150 && near(ig2, RED), `inner glow ${ig1} / ${ig2}`); ok('inner glow lightens the inside edge only');
+await gx(`${G.byName('Box')}.effects = { innerShadow: { on: true, color: '#000000', opacity: 1, blend: 'normal', angle: 90, distance: 15, spread: 0, size: 0 } }; d.emit('structure')`);
+assert.ok(near(await cpx(150, 105), [0, 0, 0]) && near(await cpx(150, 190), RED) && near(await cpx(150, 210), WHITE)); ok('inner shadow falls inside the top edge for a light from above');
+
+// effects follow the layer's mask, move with the layer, and track pixel edits (cache invalidation)
+await gx(`${G.byName('Box')}.effects = { dropShadow: { on: true, color: '#000000', opacity: 1, blend: 'normal', angle: 90, distance: 20, spread: 0, size: 0 } }; d.select(${G.byName('Box')}); d.addMask('reveal'); const m = d.active.mask.getContext('2d'); m.fillStyle = '#000'; m.fillRect(0, 0, 150, 300); d.active.touchMask(); d.emit('structure'); d.editMask = 0; d.setEditMask(d.active, false)`);
+assert.ok(near(await cpx(120, 210), WHITE) && near(await cpx(180, 210), [0, 0, 0])); ok('the shadow follows the masked shape (nothing below the hidden half)');
+await gx(`d.deleteMask()`);
+await page.evaluate(() => window.__app.setTool('move'));
+await drag([150, 150], [200, 150]); await wait();
+assert.ok(near(await cpx(230, 210), [0, 0, 0]) && near(await cpx(120, 210), WHITE)); ok('moving a styled layer moves its effects with it');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(near(await cpx(120, 210), [0, 0, 0]) && near(await cpx(230, 210), WHITE)); ok('undoing the move restores the effect position');
+await page.evaluate(() => { const a = window.__app; a.setFg('#20c040'); a.brush.size = 20; a.brush.hardness = 1; a.brush.opacity = 1; a.brush.flow = 1; a.setTool('brush'); });
+await drag([300, 100], [320, 100]); await wait();
+assert.ok(near(await cpx(310, 123), [0, 0, 0])); ok('painting on a styled layer updates its shadow');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(near(await cpx(310, 123), WHITE)); ok('…and undoing the stroke removes the stale shadow (cache invalidates)');
+await page.evaluate(() => window.__app.setTool('move'));
+
+// copy / paste / clear via the Layer menu
+const menu = async (title, item) => { await page.locator(`#menubar .menu .title:text-is("${title}")`).click(); await page.locator(`#menubar .menu.open .mi:has-text("${item}")`).click(); await wait(); };
+await gx(`d.select(${G.byName('Box')})`);
+await menu('Layer', 'Copy Layer Style');
+await gx(`const n = d.addLayer('Other'); n.ctx.fillStyle = '#2040e0'; n.ctx.fillRect(250, 40, 60, 60); d.emit('structure')`);
+assert.ok(near(await cpx(280, 110), WHITE)); await menu('Layer', 'Paste Layer Style');
+assert.ok(near(await cpx(280, 110), [0, 0, 0])); ok('Copy / Paste Layer Style transfers effects between layers');
+await menu('Layer', 'Clear Layer Style');
+assert.ok(near(await cpx(280, 110), WHITE)); assert.equal(await gx(`return ${G.byName('Other')}.effects`), null); ok('Clear Layer Style removes them');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(near(await cpx(280, 110), [0, 0, 0])); await gx(`d.removeLayer(${G.byName('Other')})`);
+
+// Cancel restores; Merge Down bakes the styles
+await gx(`d.select(${G.byName('Box')})`);
+await fxOpen('Layer Style');
+await fxSet('stroke', { on: true, color: '#0000ff', size: 8, position: 'outside' });
+assert.ok(near(await cpx(96, 150), [0, 0, 255])); await page.keyboard.press('Escape'); await wait();
+assert.ok(near(await cpx(96, 150), WHITE)); assert.equal(await page.locator('.fx-panel').count(), 0); ok('Cancel throws away the preview');
+const pre = [await cpx(150, 210), await cpx(150, 150), await cpx(60, 60)];
+await gx(`d.mergeDown()`); await wait();
+assert.equal(await G.sig(), 'Base'); assert.ok(near(await cpx(150, 210), pre[0], 2) && near(await cpx(150, 150), pre[1], 2)); ok('Merge Down bakes the layer style into the pixels');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await G.sig(), 'Base,Box'); assert.ok(await gx(`return !!${G.byName('Box')}.effects.dropShadow`)); ok('…and undo brings the style back');
+
+// text layer + stroke
+await page.evaluate(() => { window.__blank(400, 300); const a = window.__app; a.text.size = 120; a.text.bold = true; a.doc.createTextLayer({ ...a.text, content: 'Fx', color: '#ffffff', x: 40, y: 60 }); });
+await gx(`d.setEffects(d.active, { stroke: { on: true, color: '#0000ff', opacity: 1, blend: 'normal', size: 4, position: 'outside' }, dropShadow: { on: true, color: '#000000', opacity: 0.8, blend: 'normal', angle: 120, distance: 8, spread: 0, size: 6 } })`);
+await wait();
+const blue = await page.evaluate(() => { const c = document.querySelector('.doccanvas'), x = document.createElement('canvas'); x.width = c.width; x.height = c.height; const t = x.getContext('2d'); t.drawImage(c, 0, 0); const d = t.getImageData(0, 0, x.width, x.height).data; let n = 0, k = 0; for (let i = 0; i < d.length; i += 4) { if (d[i + 2] > 200 && d[i] < 60 && d[i + 1] < 60) n++; if (d[i] < 120 && d[i] === d[i + 1]) k++; } return { n, k }; });
+assert.ok(blue.n > 400 && blue.k > 300, JSON.stringify(blue)); ok('styles apply to text layers (outlined, shadowed text)');
+
+// PSD round-trip of every supported effect + fill opacity
+await page.evaluate(() => {
+  window.__blank(400, 300); const a = window.__app, d = a.doc; d.layers[0].name = 'Base';
+  const mk = (n, x, y, col) => { const l = d.addLayer(n); l.ctx.fillStyle = col; l.ctx.fillRect(x, y, 70, 70); return l; };
+  const A = mk('A', 30, 30, '#e02020'), Bx = mk('B', 150, 30, '#2040e0'), C = mk('C', 270, 30, '#20c040'), D = mk('D', 30, 160, '#ffd000');
+  A.effects = { dropShadow: { on: true, color: '#102030', opacity: 0.6, blend: 'multiply', angle: 135, distance: 12, spread: 20, size: 9 }, stroke: { on: true, color: '#ff00ff', opacity: 1, blend: 'normal', size: 4, position: 'center' } };
+  Bx.effects = { outerGlow: { on: true, color: '#ffaa00', opacity: 0.9, blend: 'screen', spread: 10, size: 14 }, innerShadow: { on: true, color: '#000000', opacity: 0.7, blend: 'multiply', angle: 90, distance: 6, spread: 0, size: 5 } };
+  C.effects = { colorOverlay: { on: true, color: '#00ff88', opacity: 0.5, blend: 'normal' }, innerGlow: { on: true, color: '#ffffff', opacity: 0.8, blend: 'screen', spread: 0, size: 10 } }; C.fillOpacity = 0.6;
+  D.effects = { gradientOverlay: { on: true, color1: '#112233', color2: '#ffeedd', opacity: 0.9, blend: 'normal', angle: 45, reverse: true } };
+  d.emit('structure');
+});
+await wait();
+const fr = await page.evaluate(() => window.__fxRoundtrip([[60, 60], [185, 60], [300, 60], [60, 200], [45, 120], [160, 45], [20, 20], [100, 200]]));
+assert.deepEqual(fr.fxAfter, fr.fxBefore); assert.deepEqual(fr.notes, []); ok('PSD round-trip preserves every effect parameter and Fill opacity');
+for (let i = 0; i < fr.before.length; i++) assert.ok(near(fr.after[i], fr.before[i], 3), `pixel ${i}: ${fr.before[i]} vs ${fr.after[i]}`);
+ok('…and the composite (with effects) is identical after re-import');
+
+// speed: a small styled layer on a 12-megapixel canvas
+const perf = await page.evaluate(() => {
+  window.__blank(4000, 3000); const a = window.__app, d = a.doc; const l = d.addLayer('Small'); l.ctx.fillStyle = '#e02020'; l.ctx.fillRect(1500, 1200, 300, 200);
+  l.effects = { dropShadow: { on: true, color: '#000000', opacity: 0.7, blend: 'multiply', angle: 120, distance: 20, spread: 0, size: 25 }, stroke: { on: true, color: '#0000ff', opacity: 1, blend: 'normal', size: 6, position: 'outside' } };
+  const c = document.createElement('canvas'); c.width = 4000; c.height = 3000; const cx = c.getContext('2d', { willReadFrequently: true });
+  const t = () => { const t0 = performance.now(); window.__composite(d, cx); return Math.round(performance.now() - t0); };
+  const first = t(), second = t(); d.emit('pixels'); const afterEdit = t();
+  return { first, second, afterEdit };
+});
+assert.ok(perf.first < 2500 && perf.second < perf.first, JSON.stringify(perf)); ok(`styles on a 12 MP canvas: first render ${perf.first} ms, cached ${perf.second} ms`);
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

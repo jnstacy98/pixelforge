@@ -95,3 +95,14 @@ input[type=range] { accent-color: var(--accent); }
 .layer.dz-inside { outline: 2px solid var(--accent); outline-offset: -2px; background: #223a5e; }
 
 .layer .clipmark { color: var(--dim); font-size: 13px; margin: 0 -2px 0 -6px; } .layer.clipbase .name { text-decoration: underline; text-underline-offset: 2px; }
+
+.fx-panel { width: 520px; right: 300px; }
+.fx-body { display: grid; grid-template-columns: 170px 1fr; min-height: 270px; }
+.fx-list { border-right: 1px solid #1a1a1a; background: var(--bg1); padding: 6px 0; }
+.fx-item { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; } .fx-item:hover { background: var(--bg3); } .fx-item.sel { background: #2b4a7a; }
+.fx-controls { padding: 10px 16px; display: grid; gap: 7px; align-content: start; } .fx-controls h3 { margin: 0 0 4px; font-size: 13px; }
+.fx-controls .row { display: grid; grid-template-columns: 78px 1fr 62px; gap: 8px; align-items: center; } .fx-controls .row .lbl { color: var(--dim); }
+.fx-controls .row select, .fx-controls .row input[type=color] { grid-column: 2 / 4; } .fx-controls input[type=color] { width: 54px; height: 24px; padding: 0; }
+.fxbadge { font-size: 10px; font-style: italic; font-weight: 700; color: #9db8e8; border: 1px solid #3b5a8a; border-radius: 3px; padding: 0 4px; cursor: pointer; }
+.fxbadge:hover { background: #3b5a8a; color: #fff; }
+.lprops .fill { display: contents; }

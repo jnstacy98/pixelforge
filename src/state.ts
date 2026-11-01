@@ -1,4 +1,5 @@
 import type { Doc } from './doc';
+import type { LayerEffects } from './fx';
 import { FONTS } from './text';
 import type { Viewer } from './viewer';
 
@@ -17,6 +18,8 @@ class App {
   fill = { tolerance: 32, contiguous: true };
   text = { font: FONTS[0][1], size: 48, bold: false, italic: false, align: 'left' as 'left' | 'center' | 'right' };
   /** Clone Stamp: source point (Alt+click), the dest→source offset, and sampling options. */
+  /** Copied layer style (Layer ▸ Copy / Paste Layer Style). */
+  styleClip: LayerEffects | null = null;
   clone = { src: null as { x: number; y: number } | null, offset: null as { x: number; y: number } | null, doc: null as Doc | null, w: 0, h: 0, aligned: true, sample: 'layer' as 'layer' | 'below' | 'all' };
   marquee = { shape: 'rect' as 'rect' | 'ellipse' };
   wand = { allLayers: false };

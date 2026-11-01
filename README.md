@@ -2,7 +2,7 @@
 
 A Photoshop-inspired desktop image editor built with Electron + TypeScript. Opens and saves **layered PSD files** and edits all common image formats with brushes, layers, blend modes, selections and filters.
 
-## Features (v0.9)
+## Features (v0.10)
 
 | Area | What works |
 |---|---|
@@ -17,6 +17,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 | **Tools** | Move, rectangular marquee, brush, eraser, paint bucket (tolerance/contiguous), gradient, eyedropper, hand. |
 | **Selection** | Rectangle & ellipse marquee, freehand lasso, magic wand (tolerance, contiguous, sample all layers). **Shift** adds, **Alt** subtracts, **Shift+Alt** intersects. Select ▸ All / Deselect / Inverse (`Ctrl+Shift+I`) / Feather. Irregular selections limit brush, eraser, bucket, gradient, fills, filters and move, and can become a layer mask. Selection changes are undoable. |
 | **Image** | Image size, canvas size, rotate 90°, flip H/V. |
+| **Layer styles** | **Drop Shadow, Inner Shadow, Outer Glow, Inner Glow, Color Overlay, Gradient Overlay, Stroke** (inside / center / outside) on pixel and text layers, via the **fx** button, double-click on the fx badge, or Layer ▸ Layer Style…, with a live-preview dialog. Stacked in Photoshop's order; shaped by the layer's mask; respect Opacity (scales effects too) and **Fill** opacity (pixels only — set Fill to 0 for "ghost" text with just a glow/stroke). Copy / Paste / Clear Layer Style, undoable, baked on Merge Down. **PSD layer styles import and export.** Rendering is cached per layer, works only in the layer's bounding box + effect reach, and uses an exact distance transform for crisp strokes and spreads. |
 | **Clipping masks** | **Ctrl+Alt+G** (or the ↳ button / Layer menu) clips the selected layer(s) to the shape of the layer below — classic "photo inside text", shading and texture on a shape, or an adjustment that only touches one layer. Works for pixel layers, text, groups and adjustment layers; the base's opacity and blend mode apply to the whole stack; hiding the base hides what's clipped to it; masks on the base cut the clipped layers too. Painting on a clipped layer is non-destructive (the paint stays on the layer). Merge Down / Merge Clipping Mask bake it. **PSD clipping flags import and export.** |
 | **Adjustments** | **Levels** (input black/white, gamma, output range, per-channel, histogram, Auto) and **Curves** (smooth overshoot-free curve, add/drag/remove points, per-channel, presets) with live preview. Also Auto Levels, brightness/contrast, hue/saturation, invert, desaturate, sepia. Adjustments respect selections and work on layer masks. |
 | **Adjustment layers** | Non-destructive **Levels, Curves, Brightness/Contrast, Hue/Saturation, Invert** layers (Layers panel ◐ button or Layer menu). They affect everything below them, come with a layer mask (paint to limit the effect) and an opacity, and stay editable — double-click the icon to reopen the dialog. Merge Down bakes one into the layer below; Flatten renders them. **Photoshop's own Levels / Curves / Invert / Brightness-Contrast / Hue-Saturation adjustment layers open as editable adjustment layers** and are written back to PSD. |
@@ -26,6 +27,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 ### Known limitations
 - Layers are document-sized (pixels moved off-canvas are cropped).
 - PSD: smart-object editing and layer effects are not preserved. Adjustment layers other than Levels, Curves, Invert, Brightness/Contrast and Hue/Saturation (e.g. Vibrance, Selective Color) open as hidden placeholders with a warning. Brightness/Contrast and Hue/Saturation use PixelForge's own formulas, so they look *similar* but not identical to Photoshop's. Hue/Saturation's per-colour ranges and Lightness are ignored.
+- Layer styles: Bevel & Emboss, Satin, Pattern Overlay, contours/noise, non-linear gradient overlays and layer styles on *groups* are not supported (reported on PSD import, then skipped). Glows draw from the edge only. Effect blend modes blend inside the layer's own buffer (not with the layers beneath), so e.g. a coloured Multiply shadow looks slightly different from Photoshop. PSD shadow/glow *spread* is written as a plain number (the PSD writer can't store percent units), so Photoshop may read non-zero spreads differently.
 - Clipping masks: always "Blend Clipped Layers as Group" (Photoshop's default); the per-layer option to turn that off isn't supported. An adjustment layer can be clipped but can't be a clipping base. A clipped layer binds to whatever unclipped layer is below it in the same group, so moving layers around re-binds them (same as Photoshop).
 - Groups: a Pass Through group that has a layer-opacity below 100% or a mask is composited as an isolated group (so adjustments inside it stop reaching layers outside it). Ungrouping discards the group's own opacity/mask/blend. You can't merge a layer down into a group (use Merge Group). Clipping masks and vector masks are not supported.
 - Healing is applied when you release the mouse (you see a plain clone while dragging, like Photoshop). Spot Healing matches *colour* of the surroundings only — it can pick a poor source over strongly textured or patterned areas, in which case undo and use the Healing Brush with a hand-picked source.
@@ -49,7 +51,7 @@ npm run dist:win    # Windows installer + portable exe (electron-builder)
 ```
 
 ## Roadmap
-Adjustment-layer blend modes, more adjustment types (vibrance, color balance, selective color), polygonal lasso, quick selection, layer styles, content-aware fill, patch tool, custom brush tips, tablet tilt, TIFF support.
+Adjustment-layer blend modes, more adjustment types (vibrance, color balance, selective color), polygonal lasso, quick selection, content-aware fill, patch tool,, custom brush tips, tablet tilt, TIFF support.
 
 ## License
 MIT
