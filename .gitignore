@@ -3,3 +3,4 @@ dist
 release
 *.log
 tests/screenshot.png
+tests/screenshot*.png

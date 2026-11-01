@@ -8,6 +8,7 @@ import { applyFilter, clearSelection, fillSelection } from './filters';
 import { formDialog } from './dialog';
 import { featherSelection, invertSelection } from './selection';
 import { editor } from './texttool';
+import { autoLevels, isAdjusting, openCurves, openLevels } from './adjustdialog';
 
 // ------------------------------------------------------------------ documents
 function refresh() {
@@ -143,18 +144,24 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Merge Down', shortcut: 'Ctrl+E', action: () => app.doc.mergeDown() },
     { label: 'Flatten Image', action: () => app.doc.flatten() },
   ] },
-  { title: 'Filter', items: () => [
-    { label: 'Invert', shortcut: 'Ctrl+I', action: () => applyFilter('Invert', 'invert(1)') },
-    { label: 'Desaturate', action: () => applyFilter('Desaturate', 'grayscale(1)') },
-    { label: 'Sepia', action: () => applyFilter('Sepia', 'sepia(1)') },
+  { title: 'Adjust', items: () => [
+    { label: 'Levels…', shortcut: 'Ctrl+L', action: openLevels },
+    { label: 'Curves…', shortcut: 'Ctrl+M', action: openCurves },
+    { label: 'Auto Levels', shortcut: 'Ctrl+Shift+L', action: autoLevels },
     '-',
-    { label: 'Gaussian Blur…', action: () => filterDialog('Gaussian Blur', [{ key: 'r', label: 'Radius (px)', type: 'range', value: 4, min: 0, max: 50, step: 0.5 }], (v) => `blur(${v.r}px)`) },
     { label: 'Brightness / Contrast…', action: () => filterDialog('Brightness / Contrast', [
       { key: 'b', label: 'Brightness', type: 'range', value: 0, min: -100, max: 100 },
       { key: 'c', label: 'Contrast', type: 'range', value: 0, min: -100, max: 100 }], (v) => `brightness(${1 + v.b / 100}) contrast(${1 + v.c / 100})`) },
     { label: 'Hue / Saturation…', action: () => filterDialog('Hue / Saturation', [
       { key: 'h', label: 'Hue', type: 'range', value: 0, min: -180, max: 180 },
       { key: 's', label: 'Saturation', type: 'range', value: 0, min: -100, max: 100 }], (v) => `hue-rotate(${v.h}deg) saturate(${Math.max(0, 1 + v.s / 100)})`) },
+    '-',
+    { label: 'Invert', shortcut: 'Ctrl+I', action: () => applyFilter('Invert', 'invert(1)') },
+    { label: 'Desaturate', action: () => applyFilter('Desaturate', 'grayscale(1)') },
+    { label: 'Sepia', action: () => applyFilter('Sepia', 'sepia(1)') },
+  ] },
+  { title: 'Filter', items: () => [
+    { label: 'Gaussian Blur…', action: () => filterDialog('Gaussian Blur', [{ key: 'r', label: 'Radius (px)', type: 'range', value: 4, min: 0, max: 50, step: 0.5 }], (v) => `blur(${v.r}px)`) },
   ] },
   { title: 'View', items: () => [
     { label: 'Fit on Screen', shortcut: 'Ctrl+0', action: () => app.view.fit() },
@@ -192,7 +199,7 @@ function initMenus() {
 
 // ------------------------------------------------------------------ shortcuts
 window.addEventListener('keydown', (e) => {
-  if (isTyping(e)) return;
+  if (isTyping(e) || isAdjusting()) return;
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   const doc = app.doc;
   if (mod) {
@@ -208,6 +215,8 @@ window.addEventListener('keydown', (e) => {
       a: () => doc.setSelection({ x: 0, y: 0, w: doc.width, h: doc.height }),
       d: () => doc.selection && doc.setSelection(null),
       i: () => (e.shiftKey ? invertSelection(doc) : applyFilter('Invert', 'invert(1)')),
+      l: () => (e.shiftKey ? autoLevels() : openLevels()),
+      m: () => openCurves(),
       '0': () => app.view.fit(), '1': () => app.view.setZoom(1),
       '=': () => app.view.setZoom(app.view.zoom * 1.25), '+': () => app.view.setZoom(app.view.zoom * 1.25), '-': () => app.view.setZoom(app.view.zoom / 1.25),
       backspace: () => fillSelection(app.bg),

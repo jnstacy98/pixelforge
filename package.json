@@ -14,7 +14,7 @@
     "app:dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron . --dev\"",
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
-    "test": "node tests/e2e.mjs"
+    "test": "node tests/unit.mjs && node tests/e2e.mjs"
   },
   "build": {
     "appId": "dev.pixelforge.app",

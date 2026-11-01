@@ -2,7 +2,7 @@
 
 A Photoshop-inspired desktop image editor built with Electron + TypeScript. Opens and saves **layered PSD files** and edits all common image formats with brushes, layers, blend modes, selections and filters.
 
-## Features (v0.3)
+## Features (v0.4)
 
 | Area | What works |
 |---|---|
@@ -14,7 +14,8 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 | **Tools** | Move, rectangular marquee, brush, eraser, paint bucket (tolerance/contiguous), gradient, eyedropper, hand. |
 | **Selection** | Rectangle & ellipse marquee, freehand lasso, magic wand (tolerance, contiguous, sample all layers). **Shift** adds, **Alt** subtracts, **Shift+Alt** intersects. Select ▸ All / Deselect / Inverse (`Ctrl+Shift+I`) / Feather. Irregular selections limit brush, eraser, bucket, gradient, fills, filters and move, and can become a layer mask. Selection changes are undoable. |
 | **Image** | Image size, canvas size, rotate 90°, flip H/V. |
-| **Filters** | Invert, desaturate, sepia, gaussian blur, brightness/contrast, hue/saturation. |
+| **Adjustments** | **Levels** (input black/white, gamma, output range, per-channel, histogram, Auto) and **Curves** (smooth overshoot-free curve, add/drag/remove points, per-channel, presets) with live preview. Also Auto Levels, brightness/contrast, hue/saturation, invert, desaturate, sepia. Adjustments respect selections and work on layer masks. |
+| **Filters** | Gaussian blur. |
 | **Editing** | Undo/redo history (100 steps), zoom/pan (wheel, Space-drag), fit/100%. |
 
 ### Known limitations
@@ -24,7 +25,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 
 ## Shortcuts
 `V` move · `M` marquee · `L` lasso · `W` magic wand · `B` brush · `E` eraser · `G` bucket · `D` gradient · `T` text · `I` eyedropper · `H` hand · `X` swap colors · `[` `]` brush size
-`Ctrl+N/O/S` new/open/save PSD · `Ctrl+Shift+S` export PNG · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo · `Ctrl+J` duplicate layer · `Ctrl+E` merge down · `Ctrl+A/D` select all/none · `Ctrl+I` invert · `Ctrl+0/1` fit/100% · `Space`+drag pan
+`Ctrl+N/O/S` new/open/save PSD · `Ctrl+Shift+S` export PNG · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo · `Ctrl+J` duplicate layer · `Ctrl+E` merge down · `Ctrl+A/D` select all/none · `Ctrl+L` levels · `Ctrl+M` curves · `Ctrl+Shift+L` auto levels · `Ctrl+I` invert · `Ctrl+0/1` fit/100% · `Space`+drag pan
 
 ## Development
 
@@ -34,12 +35,12 @@ npm run app:dev     # Vite dev server + Electron with hot reload
 npm run dev         # browser-only (works for most things; file dialogs fall back to the web APIs)
 npm run build       # typecheck + production build
 npm start           # build and launch the desktop app
-npm test            # end-to-end tests (headless Chromium via Playwright; run `npm run build` first)
+npm test            # unit tests (tone maths) + end-to-end tests (headless Chromium via Playwright; run `npm run build` first)
 npm run dist:win    # Windows installer + portable exe (electron-builder)
 ```
 
 ## Roadmap
-Polygonal lasso, quick selection, clone stamp, curves/levels, layer styles, groups, custom brush tips, tablet tilt, TIFF support.
+Non-destructive adjustment layers, polygonal lasso, quick selection, clone stamp, layer styles, groups, custom brush tips, tablet tilt, TIFF support.
 
 ## License
 MIT

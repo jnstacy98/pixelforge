@@ -72,3 +72,13 @@ input[type=range] { accent-color: var(--accent); }
 .layer canvas.target { outline: 2px solid var(--accent); outline-offset: 0; }
 .layer canvas.mthumb { background: #000; position: relative; } .layer canvas.mthumb.off { opacity: .35; outline: 2px dashed #c33; }
 .texteditor { position: absolute; z-index: 20; margin: 0; padding: 0; border: 0; outline: 1px dashed var(--accent); outline-offset: 2px; background: transparent; resize: none; overflow: hidden; white-space: pre; user-select: text; caret-color: currentColor; transform-origin: 0 0; }
+
+.adjust-back { position: fixed; inset: 0; z-index: 250; background: transparent; }
+.adjust-panel { position: fixed; right: 290px; top: 84px; width: 304px; background: var(--bg2); border: 1px solid #000; border-radius: 8px; box-shadow: 0 16px 50px #000b; outline: none; }
+.adjust-panel h2 { margin: 0; padding: 9px 14px; font-size: 13px; cursor: move; background: var(--bg3); border-radius: 8px 8px 0 0; }
+.adjust-body { padding: 12px 14px; display: grid; gap: 8px; }
+.adjust-body .row { display: flex; align-items: center; gap: 6px; } .adjust-body canvas { display: block; max-width: none; }
+.adjust-body .hint { color: var(--dim); font-size: 11px; } .adjust-body .readout { color: var(--dim); font-variant-numeric: tabular-nums; height: 14px; }
+.curvecanvas { cursor: crosshair; touch-action: none; }
+.grow { flex: 1; }
+.adjust-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid #1a1a1a; }

@@ -217,6 +217,110 @@ await page.evaluate(() => window.__app.doc.addMask('selection')); await wait();
 const mk = await page.evaluate(() => { const m = window.__app.doc.active.mask.getContext('2d'); return { inside: m.getImageData(100, 150, 1, 1).data[0], outside: m.getImageData(300, 50, 1, 1).data[0] }; });
 assert.equal(mk.inside, 255); assert.equal(mk.outside, 0); ok('layer mask from an irregular selection');
 
+
+// 6d. Levels & Curves
+const newGray = async (rgb = [128, 128, 128]) => {
+  await page.evaluate((c) => { window.__blank(400, 300); const d = window.__app.doc, l = d.active; l.ctx.fillStyle = `rgb(${c})`; l.ctx.fillRect(0, 0, 400, 300); d.emit('structure'); }, rgb);
+  await wait();
+};
+const gray = async (x = 10, y = 10) => (await lpx2(x, y)).slice(0, 3);
+const levels = (c, p) => page.evaluate(([c, p]) => document.querySelector('.adjust-body').__levels.set(c, p), [c, p]);
+const curves = (c, pts) => page.evaluate(([c, pts]) => document.querySelector('.adjust-body').__curves.set(c, pts), [c, pts]);
+
+await newGray();
+await page.keyboard.press('Control+l'); await page.waitForSelector('.adjust-panel');
+await levels('rgb', { gamma: 2 }); await page.waitForTimeout(150);
+assert.deepEqual(await gray(), [181, 181, 181]); ok('Levels: live preview applies gamma 2 (128 → 181)');
+await page.keyboard.press('Escape'); await wait();
+assert.equal(await page.locator('.adjust-panel').count(), 0); assert.deepEqual(await gray(), [128, 128, 128]); ok('Levels: Cancel restores the original pixels');
+
+await page.keyboard.press('Control+l'); await page.waitForSelector('.adjust-panel');
+await levels('rgb', { ib: 100, iw: 200 }); await page.waitForTimeout(150);
+const lv = await gray(); assert.ok(Math.abs(lv[0] - 71) <= 1, `got ${lv}`); ok('Levels: input black/white points stretch contrast');
+await page.click('.adjust-panel button.primary'); await wait();
+assert.ok(Math.abs((await gray())[0] - 71) <= 1);
+const hl = await page.evaluate(() => window.__app.doc.history.undoLabel); assert.equal(hl, 'Levels'); ok('Levels: OK commits one "Levels" history step');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual(await gray(), [128, 128, 128]); ok('Levels: undo restores pixels');
+
+// per-channel + Auto in dialog
+await newGray([100, 100, 100]);
+await page.keyboard.press('Control+l'); await page.waitForSelector('.adjust-panel');
+await levels('r', { iw: 200 }); await page.waitForTimeout(150);
+const ch = await gray(); assert.ok(ch[0] > 120 && ch[1] === 100 && ch[2] === 100, `got ${ch}`); ok('Levels: red channel adjusts independently');
+await page.keyboard.press('Escape'); await wait();
+
+// live preview toggle
+await newGray();
+await page.keyboard.press('Control+l'); await page.waitForSelector('.adjust-panel');
+await levels('rgb', { gamma: 2 }); await page.waitForTimeout(150);
+await page.uncheck('.adjust-foot input[type=checkbox]'); await page.waitForTimeout(150);
+assert.deepEqual(await gray(), [128, 128, 128]); ok('Levels: unchecking Preview shows the original');
+await page.keyboard.press('Escape'); await wait();
+
+// Curves via hook (invert) + OK + undo
+await newGray();
+await page.keyboard.press('Control+m'); await page.waitForSelector('.curvecanvas');
+await curves('rgb', [{ x: 0, y: 255 }, { x: 255, y: 0 }]); await page.waitForTimeout(150);
+assert.ok(Math.abs((await gray())[0] - 127) <= 1); ok('Curves: inverting curve flips tones');
+await page.keyboard.press('Enter'); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Curves'); ok('Curves: Enter commits');
+await page.keyboard.press('Control+z'); await wait(); assert.deepEqual(await gray(), [128, 128, 128]); ok('Curves: undo');
+
+// Curves with real mouse: click on the diagonal at x=128 and drag up to 192
+await newGray();
+await page.keyboard.press('Control+m'); await page.waitForSelector('.curvecanvas');
+const cb = await page.locator('.curvecanvas').boundingBox();
+const cx = (v) => cb.x + 4 + v, cy = (v) => cb.y + 4 + 255 - v;
+await page.mouse.move(cx(128), cy(128)); await page.mouse.down(); await page.mouse.move(cx(128), cy(160), { steps: 4 }); await page.mouse.move(cx(128), cy(192), { steps: 4 }); await page.mouse.up();
+await page.waitForTimeout(150);
+const cm = await gray(); assert.ok(Math.abs(cm[0] - 192) <= 2, `got ${cm}`); ok('Curves: dragging a point on the graph with the mouse lightens midtones');
+await page.mouse.dblclick(cx(128), cy(192)); await page.waitForTimeout(150);
+assert.ok(Math.abs((await gray())[0] - 128) <= 1); ok('Curves: double-click removes the point');
+await page.keyboard.press('Escape'); await wait();
+
+// Curves per channel
+await newGray([100, 100, 100]);
+await page.keyboard.press('Control+m'); await page.waitForSelector('.curvecanvas');
+await curves('b', [{ x: 0, y: 0 }, { x: 100, y: 200 }, { x: 255, y: 255 }]); await page.waitForTimeout(150);
+const cc = await gray(); assert.deepEqual(cc, [100, 100, 200]); ok('Curves: blue channel curve changes only blue');
+await page.keyboard.press('Escape'); await wait();
+
+// respects rectangular + irregular selections
+await newGray();
+await page.evaluate(() => window.__app.doc.setSelection({ x: 0, y: 0, w: 200, h: 300 }));
+await page.keyboard.press('Control+m'); await page.waitForSelector('.curvecanvas');
+await curves('rgb', [{ x: 0, y: 255 }, { x: 255, y: 0 }]); await page.waitForTimeout(150); await page.keyboard.press('Enter'); await wait();
+assert.ok(Math.abs((await gray(50, 50))[0] - 127) <= 1); assert.deepEqual(await gray(300, 50), [128, 128, 128]); ok('Curves: limited to a rectangular selection');
+await newGray();
+await page.evaluate(() => { const d = window.__app.doc, m = document.createElement('canvas'); m.width = 400; m.height = 300; const x = m.getContext('2d'); x.beginPath(); x.arc(200, 150, 60, 0, 7); x.fill(); d.setSelection({ x: 140, y: 90, w: 120, h: 120 }, m); });
+await page.keyboard.press('Control+l'); await page.waitForSelector('.adjust-panel');
+await levels('rgb', { gamma: 2 }); await page.waitForTimeout(150); await page.keyboard.press('Enter'); await wait();
+assert.deepEqual(await gray(200, 150), [181, 181, 181]); assert.deepEqual(await gray(145, 95), [128, 128, 128]); assert.deepEqual(await gray(10, 10), [128, 128, 128]); ok('Levels: respects a circular selection (corner of its bounds untouched)');
+
+// Auto Levels
+await newGray([60, 60, 60]);
+await page.evaluate(() => { const l = window.__app.doc.active; l.ctx.fillStyle = 'rgb(180,180,180)'; l.ctx.fillRect(200, 0, 200, 300); });
+await page.keyboard.press('Control+Shift+l'); await wait();
+const a0 = await gray(50, 50), a1 = await gray(300, 50);
+assert.ok(a0[0] <= 5 && a1[0] >= 250, `got ${a0} ${a1}`); ok('Auto Levels stretches a narrow histogram to full range');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Auto Levels');
+
+// works on a layer mask and leaves pixels alone
+await newGray();
+await page.evaluate(() => window.__app.doc.addMask('reveal')); await wait();
+await page.keyboard.press('Control+l'); await page.waitForSelector('.adjust-panel');
+await levels('rgb', { ow: 128 }); await page.waitForTimeout(150); await page.keyboard.press('Enter'); await wait();
+const mvm = await page.evaluate(() => ({ mask: window.__app.doc.active.mask.getContext('2d').getImageData(10, 10, 1, 1).data[0], px: [...window.__app.doc.active.ctx.getImageData(10, 10, 1, 1).data.slice(0, 3)] }));
+assert.equal(mvm.mask, 128); assert.deepEqual(mvm.px, [128, 128, 128]); ok('Levels edits the layer mask when it is the target');
+
+// shortcuts are suspended while a dialog is open
+await newGray();
+await page.keyboard.press('Control+l'); await page.waitForSelector('.adjust-panel');
+await page.keyboard.press('Control+n'); await wait();
+assert.equal(await page.locator('.modal').count(), 0); ok('global shortcuts are suspended while an adjustment dialog is open');
+await page.keyboard.press('Escape'); await wait();
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');
