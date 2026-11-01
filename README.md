@@ -2,7 +2,7 @@
 
 A Photoshop-inspired desktop image editor built with Electron + TypeScript. Opens and saves **layered PSD files** and edits all common image formats with brushes, layers, blend modes, selections and filters.
 
-## Features (v0.2)
+## Features (v0.3)
 
 | Area | What works |
 |---|---|
@@ -12,7 +12,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 | **Text** | Text tool (`T`): click to type, click existing text to re-edit. Font, size, bold, italic, alignment, color (foreground). Text stays an editable layer — move it, restyle it, mask it, blend it. Painting on it or applying filters rasterizes it (undoable). |
 | **Brush & eraser** | Size, hardness, opacity, flow, spacing; pen-pressure sensitivity; stroke-level opacity like Photoshop. `[` / `]` resize. |
 | **Tools** | Move, rectangular marquee, brush, eraser, paint bucket (tolerance/contiguous), gradient, eyedropper, hand. |
-| **Selection** | Rectangular selection limits brush, fills, gradients, filters and move. |
+| **Selection** | Rectangle & ellipse marquee, freehand lasso, magic wand (tolerance, contiguous, sample all layers). **Shift** adds, **Alt** subtracts, **Shift+Alt** intersects. Select ▸ All / Deselect / Inverse (`Ctrl+Shift+I`) / Feather. Irregular selections limit brush, eraser, bucket, gradient, fills, filters and move, and can become a layer mask. Selection changes are undoable. |
 | **Image** | Image size, canvas size, rotate 90°, flip H/V. |
 | **Filters** | Invert, desaturate, sepia, gaussian blur, brightness/contrast, hue/saturation. |
 | **Editing** | Undo/redo history (100 steps), zoom/pan (wheel, Space-drag), fit/100%. |
@@ -23,7 +23,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 - No TIFF/RAW support yet.
 
 ## Shortcuts
-`V` move · `M` marquee · `B` brush · `E` eraser · `G` bucket · `D` gradient · `T` text · `I` eyedropper · `H` hand · `X` swap colors · `[` `]` brush size
+`V` move · `M` marquee · `L` lasso · `W` magic wand · `B` brush · `E` eraser · `G` bucket · `D` gradient · `T` text · `I` eyedropper · `H` hand · `X` swap colors · `[` `]` brush size
 `Ctrl+N/O/S` new/open/save PSD · `Ctrl+Shift+S` export PNG · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo · `Ctrl+J` duplicate layer · `Ctrl+E` merge down · `Ctrl+A/D` select all/none · `Ctrl+I` invert · `Ctrl+0/1` fit/100% · `Space`+drag pan
 
 ## Development
@@ -39,7 +39,7 @@ npm run dist:win    # Windows installer + portable exe (electron-builder)
 ```
 
 ## Roadmap
-Lasso/magic-wand selections, clone stamp, curves/levels, layer styles, groups, custom brush tips, tablet tilt, TIFF support.
+Polygonal lasso, quick selection, clone stamp, curves/levels, layer styles, groups, custom brush tips, tablet tilt, TIFF support.
 
 ## License
 MIT

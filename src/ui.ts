@@ -8,6 +8,8 @@ const svg = (p: string) => `<svg viewBox="0 0 24 24">${p}</svg>`;
 const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
   { id: 'move', key: 'V', label: 'Move', icon: svg('<path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/>') },
   { id: 'marquee', key: 'M', label: 'Rectangular Marquee', icon: svg('<rect x="4" y="4" width="16" height="16" stroke-dasharray="3 3"/>') },
+  { id: 'lasso', key: 'L', label: 'Lasso', icon: svg('<path d="M7 22a5 5 0 01-2-4"/><path d="M3.3 14A6.8 6.8 0 012 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 01-5-1"/><circle cx="5" cy="19" r="2"/>') },
+  { id: 'wand', key: 'W', label: 'Magic Wand', icon: svg('<path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8L19 13M15 9h.01M17.8 6.2L19 5M3 21l9-9M12.2 6.2L11 5"/>') },
   { id: 'brush', key: 'B', label: 'Brush', icon: svg('<path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 114.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 00-3-3.02z"/>') },
   { id: 'eraser', key: 'E', label: 'Eraser', icon: svg('<path d="M20 20H8l-4.6-4.6a1.4 1.4 0 010-2L13 3.8a1.4 1.4 0 012 0l5.6 5.6a1.4 1.4 0 010 2L11 21"/><path d="M7 11l6 6"/>') },
   { id: 'bucket', key: 'G', label: 'Paint Bucket', icon: svg('<path d="M19 11l-8-8-8.6 8.6a2 2 0 000 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11z"/><path d="M5 2l5 5M2 13h15"/><path d="M22 20a2 2 0 11-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4z"/>') },
@@ -48,6 +50,7 @@ function slider(label: string, get: () => number, set: (v: number) => void, min:
   wrap.append(label, inp, out);
   return wrap;
 }
+const hintEl = (text: string) => { const s = document.createElement('span'); s.style.color = 'var(--dim)'; s.textContent = text; return s; };
 export function renderOptions() {
   const el = $('options'); el.innerHTML = '';
   const t = app.toolId, b = app.brush;
@@ -68,6 +71,22 @@ export function renderOptions() {
     s.innerHTML = '<option value="fg-bg">Foreground → Background</option><option value="fg-transparent">Foreground → Transparent</option>';
     s.value = app.gradient.mode; s.onchange = () => (app.gradient.mode = s.value as any); l.append('Mode', s); el.append(l);
     el.append(slider('Opacity', () => b.opacity, (v) => (b.opacity = v), 0.01, 1, 0.01, pct));
+  } else if (t === 'marquee') {
+    const l = document.createElement('label'); const s = document.createElement('select');
+    s.innerHTML = '<option value="rect">Rectangle</option><option value="ellipse">Ellipse</option>';
+    s.value = app.marquee.shape; s.onchange = () => (app.marquee.shape = s.value as 'rect' | 'ellipse'); l.append('Shape', s);
+    el.append(l, hintEl('Shift = add · Alt = subtract · Shift+Alt = intersect'));
+  } else if (t === 'lasso') {
+    el.append(hintEl('Drag to draw a freehand selection · Shift = add · Alt = subtract · Shift+Alt = intersect'));
+  } else if (t === 'wand') {
+    el.append(slider('Tolerance', () => app.fill.tolerance, (v) => (app.fill.tolerance = v), 0, 255));
+    const mk = (label: string, get: () => boolean, set: (v: boolean) => void) => {
+      const l = document.createElement('label'); const c = document.createElement('input'); c.type = 'checkbox'; c.checked = get();
+      c.onchange = () => set(c.checked); l.append(c, label); return l;
+    };
+    el.append(mk('Contiguous', () => app.fill.contiguous, (v) => (app.fill.contiguous = v)),
+      mk('Sample all layers', () => app.wand.allLayers, (v) => (app.wand.allLayers = v)),
+      hintEl('Shift = add · Alt = subtract'));
   } else if (t === 'text') {
     const tx = app.text, fire = () => app.emit('textstyle');
     const fontSel = document.createElement('select');
@@ -90,7 +109,7 @@ export function renderOptions() {
   } else {
     const hint = document.createElement('span');
     hint.style.color = 'var(--dim)';
-    hint.textContent = ({ move: 'Drag to move the active layer (or the selected pixels).', marquee: 'Drag to select. Selection limits painting, fills and filters.', eyedropper: 'Click to pick foreground color. Alt+click for background.', hand: 'Drag to pan. Scroll wheel zooms.' } as Record<string, string>)[t] ?? '';
+    hint.textContent = ({ move: 'Drag to move the active layer (or the selected pixels).', eyedropper: 'Click to pick foreground color. Alt+click for background.', hand: 'Drag to pan. Scroll wheel zooms.' } as Record<string, string>)[t] ?? '';
     el.append(hint);
   }
 }

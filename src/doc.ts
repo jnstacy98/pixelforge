@@ -117,7 +117,12 @@ interface Snapshot { w: number; h: number; items: { layer: Layer; state: LayerSt
 export class Doc {
   layers: Layer[] = [];
   active!: Layer;
+  /** Bounding box of the selection. With `selMask` null the selection is exactly this rectangle. */
   selection: Rect | null = null;
+  /** Alpha mask (document-sized) for non-rectangular selections. Treat as immutable once set. */
+  selMask: HTMLCanvasElement | null = null;
+  /** Temporary offset applied to the selection outline while the Move tool drags it. */
+  selShift: { dx: number; dy: number } | null = null;
   stroke: Stroke | null = null;
   history = new History();
   view: { zoom: number; panX: number; panY: number } | null = null;
@@ -244,7 +249,13 @@ export class Doc {
       const m = makeCanvas(this.width, this.height), x = ctxOf(m);
       x.fillStyle = kind === 'reveal' ? '#fff' : '#000';
       x.fillRect(0, 0, m.width, m.height);
-      if (kind === 'selection' && this.selection) { x.fillStyle = '#fff'; x.fillRect(this.selection.x, this.selection.y, this.selection.w, this.selection.h); }
+      if (kind === 'selection' && this.selection) {
+        const white = makeCanvas(m.width, m.height), wx = ctxOf(white);
+        wx.fillStyle = '#fff'; wx.fillRect(0, 0, m.width, m.height);
+        if (this.selMask) { wx.globalCompositeOperation = 'destination-in'; wx.drawImage(this.selMask, 0, 0); }
+        else { wx.globalCompositeOperation = 'destination-in'; wx.fillRect(this.selection.x, this.selection.y, this.selection.w, this.selection.h); }
+        x.drawImage(white, 0, 0);
+      }
       l.mask = m; l.maskEnabled = true; l.editMask = true; l.touchMask(); this.active = l;
     });
   }
@@ -293,13 +304,14 @@ export class Doc {
     this.emit('structure');
   }
 
-  setSelection(sel: Rect | null) {
-    const before = this.selection;
-    this.selection = sel;
+  setSelection(sel: Rect | null, mask: HTMLCanvasElement | null = null) {
+    const before = this.selection, beforeMask = this.selMask;
+    this.selection = sel; this.selMask = sel ? mask : null;
+    const afterMask = this.selMask;
     this.history.push({
       label: 'Selection',
-      undo: () => { this.selection = before; this.emit('selection'); },
-      redo: () => { this.selection = sel; this.emit('selection'); },
+      undo: () => { this.selection = before; this.selMask = beforeMask; this.emit('selection'); },
+      redo: () => { this.selection = sel; this.selMask = afterMask; this.emit('selection'); },
     });
     this.emit('selection');
   }
@@ -311,7 +323,7 @@ export class Doc {
   private restore(s: Snapshot) {
     this.width = s.w; this.height = s.h;
     for (const it of s.items) restoreLayer(it.layer, it.state);
-    this.selection = null;
+    this.selection = null; this.selMask = null;
     this.emit('structure');
   }
   /** Rebuild every layer canvas (and mask) at a new size using `draw`. Text layers are rasterized. */
@@ -325,7 +337,7 @@ export class Doc {
       l.text = null;
     }
     this.width = Math.round(nw); this.height = Math.round(nh);
-    this.selection = null;
+    this.selection = null; this.selMask = null;
     const after = this.capture();
     this.history.push({ label, undo: () => this.restore(before), redo: () => this.restore(after) });
     this.emit('structure');

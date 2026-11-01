@@ -6,6 +6,7 @@ import { initToolbar, initPanels, initStatus, renderOptions, renderLayers, rende
 import { importFile, pickFiles, saveAs, OPEN_EXTS, type ExportFormat, type OpenedFile } from './io';
 import { applyFilter, clearSelection, fillSelection } from './filters';
 import { formDialog } from './dialog';
+import { featherSelection, invertSelection } from './selection';
 import { editor } from './texttool';
 
 // ------------------------------------------------------------------ documents
@@ -90,11 +91,19 @@ const menus: { title: string; items: () => Item[] }[] = [
       { label: 'Fill with Foreground', shortcut: 'Alt+Backspace', action: () => fillSelection(app.fg) },
       { label: 'Fill with Background', shortcut: 'Ctrl+Backspace', action: () => fillSelection(app.bg) },
       { label: 'Clear', shortcut: 'Delete', action: clearSelection },
-      '-',
-      { label: 'Select All', shortcut: 'Ctrl+A', action: () => app.doc.setSelection({ x: 0, y: 0, w: app.doc.width, h: app.doc.height }) },
-      { label: 'Deselect', shortcut: 'Ctrl+D', action: () => app.doc.selection && app.doc.setSelection(null) },
     ];
   } },
+  { title: 'Select', items: () => [
+    { label: 'All', shortcut: 'Ctrl+A', action: () => app.doc.setSelection({ x: 0, y: 0, w: app.doc.width, h: app.doc.height }) },
+    { label: 'Deselect', shortcut: 'Ctrl+D', action: () => app.doc.selection && app.doc.setSelection(null) },
+    { label: 'Inverse', shortcut: 'Ctrl+Shift+I', action: () => invertSelection(app.doc) },
+    '-',
+    { label: 'Feather…', action: async () => {
+      if (!app.doc.selection) return app.toast('Make a selection first');
+      const v = await formDialog('Feather Selection', [{ key: 'r', label: 'Radius (px)', type: 'range', value: 8, min: 1, max: 100 }]);
+      if (v) featherSelection(app.doc, v.r);
+    } },
+  ] },
   { title: 'Image', items: () => [
     { label: 'Image Size…', action: async () => {
       const d = app.doc;
@@ -198,7 +207,7 @@ window.addEventListener('keydown', (e) => {
       e: () => doc.mergeDown(),
       a: () => doc.setSelection({ x: 0, y: 0, w: doc.width, h: doc.height }),
       d: () => doc.selection && doc.setSelection(null),
-      i: () => applyFilter('Invert', 'invert(1)'),
+      i: () => (e.shiftKey ? invertSelection(doc) : applyFilter('Invert', 'invert(1)')),
       '0': () => app.view.fit(), '1': () => app.view.setZoom(1),
       '=': () => app.view.setZoom(app.view.zoom * 1.25), '+': () => app.view.setZoom(app.view.zoom * 1.25), '-': () => app.view.setZoom(app.view.zoom / 1.25),
       backspace: () => fillSelection(app.bg),
@@ -263,4 +272,10 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const doc = await importFile({ name: 'test.png', data: await blob.arrayBuffer() });
   addDoc(doc);
   return { w: doc.width, h: doc.height, layers: doc.layers.length };
+};
+(window as any).__blank = (w: number, h: number) => { addDoc(Doc.blank(w, h, 'sel-test', '#ffffff')); app.view.setZoom(1); return true; };
+(window as any).__feather = (r: number) => {
+  featherSelection(app.doc, r);
+  const x = app.doc.selMask!.getContext('2d')!;
+  return { edge: x.getImageData(100, 150, 1, 1).data[3], center: x.getImageData(150, 150, 1, 1).data[3] };
 };

@@ -1,4 +1,5 @@
 import { Doc, blendOp, makeCanvas, ctxOf, grayToAlpha, type Stroke } from './doc';
+import { clipToSelection } from './selection';
 
 const scratches: HTMLCanvasElement[] = [];
 function scratch(i: number, w: number, h: number) {
@@ -28,7 +29,8 @@ export function composite(doc: Doc, ctx: CanvasRenderingContext2D, includeHidden
   for (const layer of doc.layers) {
     if ((!layer.visible && !includeHidden) || layer.hiddenForEdit) continue;
     let src = layer.canvas;
-    const live = doc.stroke && doc.stroke.layer === layer ? doc.stroke : null;
+    let live = doc.stroke && doc.stroke.layer === layer ? doc.stroke : null;
+    if (live && doc.selMask) live = { ...live, canvas: clipToSelection(doc, live.canvas, scratch(4, w, h)) };
     if (live && !live.onMask) src = withStroke(scratch(0, w, h), layer.canvas, live);
     if (layer.mask && layer.maskEnabled) {
       const alpha = live?.onMask

@@ -3,6 +3,7 @@ import { composite } from './render';
 import { app } from './state';
 import { tools, type Pt } from './tools';
 import { ctxOf } from './doc';
+import { outlineOf } from './selection';
 
 export class Viewer {
   zoom = 1; panX = 0; panY = 0;
@@ -166,7 +167,12 @@ export class Viewer {
     const doc = this.doc;
     if (!doc) return;
     const ts = (x: number, y: number): [number, number] => [x * this.zoom + this.panX, y * this.zoom + this.panY];
-    if (doc.selection) {
+    if (doc.selection && doc.selMask) {
+      const sh = doc.selShift ?? { dx: 0, dy: 0 };
+      ctx.save(); ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(outlineOf(doc.selMask), (sh.dx) * this.zoom + this.panX, sh.dy * this.zoom + this.panY, doc.width * this.zoom, doc.height * this.zoom);
+      ctx.restore();
+    } else if (doc.selection) {
       const s = doc.selection;
       const [x, y] = ts(s.x, s.y);
       const w = s.w * this.zoom, h = s.h * this.zoom;

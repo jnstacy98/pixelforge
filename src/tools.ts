@@ -1,5 +1,8 @@
 import { app, hexToRgb, rgbToHex, paintColor, grayOf, type ToolId } from './state';
 import { TextTool } from './texttool';
+import { MarqueeTool, LassoTool, WandTool } from './selecttools';
+import { clipToSelection, selectedFlags } from './selection';
+import { floodSelect } from './flood';
 import { Layer, cloneCanvas, clampRect, ctxOf, makeCanvas, pushPixelEdit, type Rect } from './doc';
 import { flatten } from './render';
 
@@ -12,8 +15,6 @@ export interface Tool {
   overlay?(ctx: CanvasRenderingContext2D, toScreen: (x: number, y: number) => [number, number]): void;
   brushCursor?: boolean;
 }
-
-const norm = (a: Pt, b: Pt): Rect => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
 
 // ---------------------------------------------------------------- brush stamps
 const stampCache = new Map<string, HTMLCanvasElement>();
@@ -115,6 +116,7 @@ class PaintTool implements Tool {
     this.active = false;
     const doc = app.doc, s = doc.stroke!;
     ctxOf(strokeCanvas!).restore();
+    if (doc.selMask) clipToSelection(doc, strokeCanvas!, strokeCanvas!);
     const ctx = this.layer.tctx;
     ctx.save();
     ctx.globalAlpha = s.opacity;
@@ -134,38 +136,15 @@ class BucketTool implements Tool {
     const w = layer.target.width, h = layer.target.height;
     const sx = Math.floor(p.x), sy = Math.floor(p.y);
     if (sx < 0 || sy < 0 || sx >= w || sy >= h) return;
-    const bounds = doc.selection ? clampRect(doc.selection, w, h)! : { x: 0, y: 0, w, h };
-    if (!bounds || sx < bounds.x || sy < bounds.y || sx >= bounds.x + bounds.w || sy >= bounds.y + bounds.h) return;
+    const bounds = doc.selection ? clampRect(doc.selection, w, h) : { x: 0, y: 0, w, h };
+    if (!bounds) return;
     const before = cloneCanvas(layer.target);
-    const img = layer.tctx.getImageData(0, 0, w, h), d = img.data;
-    const o = (sy * w + sx) * 4;
-    const t = [d[o], d[o + 1], d[o + 2], d[o + 3]];
-    const tol = app.fill.tolerance;
-    const match = (i: number) =>
-      Math.abs(d[i] - t[0]) <= tol && Math.abs(d[i + 1] - t[1]) <= tol && Math.abs(d[i + 2] - t[2]) <= tol && Math.abs(d[i + 3] - t[3]) <= tol;
-    const mask = new Uint8Array(w * h);
-    const x0 = bounds.x, x1 = bounds.x + bounds.w, y0 = bounds.y, y1 = bounds.y + bounds.h;
-    if (app.fill.contiguous) {
-      const stack = [sx, sy];
-      while (stack.length) {
-        const y = stack.pop()!; let x = stack.pop()!;
-        while (x >= x0 && !mask[y * w + x] && match((y * w + x) * 4)) x--;
-        x++;
-        let up = false, down = false;
-        while (x < x1 && !mask[y * w + x] && match((y * w + x) * 4)) {
-          mask[y * w + x] = 1;
-          if (y > y0) { const m = !mask[(y - 1) * w + x] && match(((y - 1) * w + x) * 4); if (m && !up) { stack.push(x, y - 1); up = true; } else if (!m) up = false; }
-          if (y < y1 - 1) { const m = !mask[(y + 1) * w + x] && match(((y + 1) * w + x) * 4); if (m && !down) { stack.push(x, y + 1); down = true; } else if (!m) down = false; }
-          x++;
-        }
-      }
-    } else {
-      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (match((y * w + x) * 4)) mask[y * w + x] = 1;
-    }
+    const img = layer.tctx.getImageData(0, 0, w, h);
+    const mask = floodSelect(img.data, w, h, sx, sy, app.fill.tolerance, app.fill.contiguous, bounds, selectedFlags(doc));
     const [R, G, B] = hexToRgb(paintColor(app.fg));
     const out = new ImageData(w, h), od = out.data;
     let minX = w, minY = h, maxX = -1, maxY = -1;
-    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    for (let y = bounds.y; y < bounds.y + bounds.h; y++) for (let x = bounds.x; x < bounds.x + bounds.w; x++) {
       if (!mask[y * w + x]) continue;
       const i = (y * w + x) * 4;
       od[i] = R; od[i + 1] = G; od[i + 2] = B; od[i + 3] = 255;
@@ -202,6 +181,7 @@ class GradientTool implements Tool {
     ctx.fillStyle = g;
     const s = doc.selection ?? { x: 0, y: 0, w: doc.width, h: doc.height };
     ctx.fillRect(s.x, s.y, s.w, s.h);
+    if (doc.selMask) clipToSelection(doc, tmp, tmp);
     const lctx = layer.tctx;
     lctx.save(); lctx.globalAlpha = app.brush.opacity; lctx.drawImage(tmp, 0, 0); lctx.restore();
     pushPixelEdit(doc, layer, before, s, 'Gradient');
@@ -225,15 +205,18 @@ class MoveTool implements Tool {
   private selBefore: Rect | null = null;
   private selNow: Rect | null = null;
   private textBefore: { x: number; y: number } | null = null;
+  private floating: HTMLCanvasElement | null = null;
+  private selMaskBefore: HTMLCanvasElement | null = null;
   down(p: Pt) {
     const doc = app.doc;
     this.start = p; this.layer = doc.active;
     const l = this.layer;
-    this.selBefore = doc.selection; this.selNow = this.selBefore;
+    this.selBefore = doc.selection; this.selNow = this.selBefore; this.selMaskBefore = doc.selMask;
     const canvasItem = { get: () => l.canvas, snap: cloneCanvas(l.canvas) };
     const maskItem = l.mask ? { get: () => l.mask!, snap: cloneCanvas(l.mask) } : null;
     this.items = doc.selection ? [l.maskMode ? maskItem! : canvasItem] : maskItem ? [canvasItem, maskItem] : [canvasItem];
     this.textBefore = !doc.selection && l.text ? { x: l.text.x, y: l.text.y } : null;
+    this.floating = doc.selMask ? clipToSelection(doc, this.items[0].snap) : null; // selected pixels, cut out
   }
   move(p: Pt) {
     if (!this.start) return;
@@ -243,14 +226,23 @@ class MoveTool implements Tool {
       const c = it.get(), ctx = ctxOf(c);
       ctx.save();
       ctx.clearRect(0, 0, c.width, c.height);
-      if (s) {
+      if (s && this.floating) {
+        ctx.drawImage(it.snap, 0, 0);
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.drawImage(this.selMaskBefore!, 0, 0);
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.drawImage(this.floating, dx, dy);
+      } else if (s) {
         ctx.drawImage(it.snap, 0, 0);
         ctx.clearRect(s.x, s.y, s.w, s.h);
         ctx.drawImage(it.snap, s.x, s.y, s.w, s.h, s.x + dx, s.y + dy, s.w, s.h);
       } else ctx.drawImage(it.snap, dx, dy);
       ctx.restore();
     }
-    if (s) { this.selNow = { ...this.selBefore!, x: this.selBefore!.x + dx, y: this.selBefore!.y + dy }; doc.selection = this.selNow; }
+    if (s) {
+      this.selNow = { ...this.selBefore!, x: this.selBefore!.x + dx, y: this.selBefore!.y + dy }; doc.selection = this.selNow;
+      if (this.selMaskBefore) doc.selShift = { dx, dy };
+    }
     if (this.textBefore && this.layer.text) { this.layer.text.x = this.textBefore.x + dx; this.layer.text.y = this.textBefore.y + dy; }
     this.layer.touchMask();
     doc.emit('pixels');
@@ -259,40 +251,21 @@ class MoveTool implements Tool {
     if (!this.start) return;
     this.start = null;
     const doc = app.doc, layer = this.layer, items = this.items, selB = this.selBefore, selN = this.selNow;
+    const maskB = this.selMaskBefore;
+    let maskN = maskB;
+    if (maskB && doc.selShift) { maskN = makeCanvas(maskB.width, maskB.height); ctxOf(maskN).drawImage(maskB, doc.selShift.dx, doc.selShift.dy); doc.selMask = maskN; }
+    doc.selShift = null; this.floating = null;
     const after = items.map((it) => cloneCanvas(it.get()));
     const tb = this.textBefore, ta = layer.text && tb ? { x: layer.text.x, y: layer.text.y } : null;
-    const put = (src: HTMLCanvasElement[], sel: Rect | null, t: { x: number; y: number } | null) => {
+    const put = (src: HTMLCanvasElement[], sel: Rect | null, sm: HTMLCanvasElement | null, t: { x: number; y: number } | null) => {
       items.forEach((it, i) => { const x = ctxOf(it.get()); x.clearRect(0, 0, it.get().width, it.get().height); x.drawImage(src[i], 0, 0); });
-      doc.selection = sel;
+      doc.selection = sel; doc.selMask = sm;
       if (t && layer.text) { layer.text.x = t.x; layer.text.y = t.y; }
       layer.touchMask(); doc.emit('structure');
     };
     const before = items.map((it) => it.snap);
-    doc.history.push({ label: 'Move', undo: () => put(before, selB, tb), redo: () => put(after, selN, ta) });
+    doc.history.push({ label: 'Move', undo: () => put(before, selB, maskB, tb), redo: () => put(after, selN, maskN, ta) });
     doc.emit('structure');
-  }
-}
-
-// ---------------------------------------------------------------- marquee
-class MarqueeTool implements Tool {
-  cursor = 'crosshair';
-  private a: Pt | null = null;
-  private before: Rect | null = null;
-  down(p: Pt) { this.a = p; this.before = app.doc.selection; }
-  move(p: Pt) {
-    if (!this.a) return;
-    const doc = app.doc;
-    doc.selection = clampRect(norm(this.a, p), doc.width, doc.height);
-    doc.emit('selection');
-  }
-  up(p: Pt) {
-    if (!this.a) return;
-    const doc = app.doc;
-    let sel = clampRect(norm(this.a, p), doc.width, doc.height);
-    if (sel && (sel.w < 2 || sel.h < 2)) sel = null;
-    this.a = null;
-    doc.selection = this.before;
-    doc.setSelection(sel);
   }
 }
 
@@ -316,5 +289,5 @@ class HandTool implements Tool { cursor = 'grab'; down() {} move() {} up() {} }
 
 export const tools: Record<ToolId, Tool> = {
   move: new MoveTool(), marquee: new MarqueeTool(), brush: new PaintTool(false), eraser: new PaintTool(true),
-  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(),
+  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(),
 };
