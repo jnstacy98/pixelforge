@@ -1,6 +1,6 @@
 // Conversion between PixelForge adjustment data and ag-psd's adjustment-layer structures (pure; unit-tested).
 import type { AdjustmentLayer } from 'ag-psd';
-import { CHANNELS_ALL, psdColorToRgb, type RGB, type Tri, type GradStop, curveLUT, defaultAdjustment, identityCurve, identityLevels, type AdjustmentData, type CurvePoint, type Channel } from './adjust.ts';
+import { cubeText, parseCube, CHANNELS_ALL, psdColorToRgb, type RGB, type Tri, type GradStop, curveLUT, defaultAdjustment, identityCurve, identityLevels, type AdjustmentData, type CurvePoint, type Channel } from './adjust.ts';
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const isIdentityPts = (p: CurvePoint[]) => p.length === 2 && p[0].x === 0 && p[0].y === 0 && p[1].x === 255 && p[1].y === 255;
@@ -35,6 +35,8 @@ export function toPsdAdjustment(a: AdjustmentData): AdjustmentLayer {
       return a.mono ? { type: 'channel mixer', monochrome: true, gray: ch(a.rows[0]) }
         : { type: 'channel mixer', monochrome: false, red: ch(a.rows[0]), green: ch(a.rows[1]), blue: ch(a.rows[2]) };
     }
+    case 'lookup': return { type: 'color lookup', lookupType: '3dlut', name: a.name, dither: false, lutFormat: 'cube', dataOrder: 'rgb', tableOrder: 'bgr',
+      lut3DFileName: (a.name || 'lookup') + '.cube', lut3DFileData: new TextEncoder().encode(cubeText(a)) };
     case 'selective': {
       const keys = ['reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas', 'whites', 'neutrals', 'blacks'] as const;
       const o: any = { type: 'selective color', mode: a.relative ? 'relative' : 'absolute' };
@@ -97,6 +99,10 @@ export function fromPsdAdjustment(p: AdjustmentLayer): AdjustmentData | null {
       const r = (c?: { red: number; green: number; blue: number; constant: number }) => (c ? [c.red, c.green, c.blue, c.constant] : null);
       if (p.monochrome) return { type: 'mixer', mono: true, rows: [r(p.gray) ?? [40, 40, 20, 0], [0, 100, 0, 0], [0, 0, 100, 0]] };
       return { type: 'mixer', mono: false, rows: [r(p.red) ?? [100, 0, 0, 0], r(p.green) ?? [0, 100, 0, 0], r(p.blue) ?? [0, 0, 100, 0]] };
+    }
+    case 'color lookup': {
+      if (p.lookupType !== '3dlut' || !p.lut3DFileData || p.lutFormat !== 'cube') return null;   // other LUT formats are not supported
+      try { return { type: 'lookup', ...parseCube(new TextDecoder().decode(p.lut3DFileData)) }; } catch { return null; }
     }
     case 'selective color': {
       const keys = ['reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas', 'whites', 'neutrals', 'blacks'] as const;

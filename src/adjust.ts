@@ -113,7 +113,37 @@ export type AdjustmentData =
   | { type: 'balance'; shadows: Tri; mids: Tri; highs: Tri; lum: boolean }   // each -100..100 (cyan-red, magenta-green, yellow-blue)
   | { type: 'mixer'; mono: boolean; rows: number[][] }           // rows: out R,G,B (or gray) -> [r,g,b,const] in %
   | { type: 'gradmap'; stops: GradStop[]; reverse: boolean }
+  | { type: 'lookup'; name: string; size: number; data: number[] }   // 3D LUT, red varies fastest, values 0..1
   | { type: 'selective'; relative: boolean; r: number[][] };     // 9 ranges (SELECTIVE_RANGES) × [c, m, y, k] in -100..100
+export function identityCube(size: number): number[] {
+  const out: number[] = [];
+  for (let b = 0; b < size; b++) for (let g = 0; g < size; g++) for (let r = 0; r < size; r++) out.push(r / (size - 1), g / (size - 1), b / (size - 1));
+  return out;
+}
+/** Parses an Adobe/Resolve .cube 3D LUT (red index varies fastest). Throws on malformed input. */
+export function parseCube(text: string): { name: string; size: number; data: number[] } {
+  let size = 0, name = '', lo = [0, 0, 0], hi = [1, 1, 1];
+  const data: number[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line[0] === '#') continue;
+    const t = line.split(/\s+/);
+    if (t[0] === 'TITLE') name = line.slice(5).trim().replace(/^"|"$/g, '');
+    else if (t[0] === 'LUT_3D_SIZE') size = parseInt(t[1], 10);
+    else if (t[0] === 'DOMAIN_MIN') lo = t.slice(1, 4).map(Number);
+    else if (t[0] === 'DOMAIN_MAX') hi = t.slice(1, 4).map(Number);
+    else if (t[0] === 'LUT_1D_SIZE') throw new Error('1D LUTs are not supported');
+    else if (/^[-+\d.]/.test(t[0]) && t.length >= 3) data.push(...t.slice(0, 3).map((v, i) => (Number(v) - lo[i]) / ((hi[i] - lo[i]) || 1)));
+  }
+  if (!(size >= 2 && size <= 256)) throw new Error('missing or invalid LUT_3D_SIZE');
+  if (data.length !== size ** 3 * 3 || data.some((v) => !Number.isFinite(v))) throw new Error('LUT data does not match its size');
+  return { name, size, data };
+}
+export function cubeText(a: { name: string; size: number; data: number[] }): string {
+  const rows: string[] = [`TITLE "${a.name.replace(/"/g, '')}"`, `LUT_3D_SIZE ${a.size}`, 'DOMAIN_MIN 0.0 0.0 0.0', 'DOMAIN_MAX 1.0 1.0 1.0'];
+  for (let i = 0; i < a.data.length; i += 3) rows.push(`${a.data[i].toFixed(6)} ${a.data[i + 1].toFixed(6)} ${a.data[i + 2].toFixed(6)}`);
+  return rows.join('\n') + '\n';
+}
 export const SELECTIVE_RANGES = ['Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas', 'Whites', 'Neutrals', 'Blacks'];
 export type RGB = [number, number, number];
 export type Tri = [number, number, number];
@@ -123,7 +153,7 @@ export type AdjustmentType = AdjustmentData['type'];
 export const ADJUSTMENT_LABELS: Record<AdjustmentType, string> = {
   levels: 'Levels', curves: 'Curves', invert: 'Invert', brightness: 'Brightness/Contrast', hue: 'Hue/Saturation',
   posterize: 'Posterize', threshold: 'Threshold', exposure: 'Exposure', vibrance: 'Vibrance', bw: 'Black & White',
-  photo: 'Photo Filter', selective: 'Selective Color', balance: 'Color Balance', mixer: 'Channel Mixer', gradmap: 'Gradient Map',
+  photo: 'Photo Filter', lookup: 'Color Lookup', selective: 'Selective Color', balance: 'Color Balance', mixer: 'Channel Mixer', gradmap: 'Gradient Map',
 };
 export const CHANNELS_ALL: Channel[] = ['rgb', 'r', 'g', 'b'];
 
@@ -142,6 +172,7 @@ export function defaultAdjustment(type: AdjustmentType): AdjustmentData {
     case 'photo': return { type, color: [236, 138, 0], density: 25, lum: true };
     case 'balance': return { type, shadows: [0, 0, 0], mids: [0, 0, 0], highs: [0, 0, 0], lum: true };
     case 'mixer': return { type, mono: false, rows: [[100, 0, 0, 0], [0, 100, 0, 0], [0, 0, 100, 0]] };
+    case 'lookup': return { type, name: '', size: 2, data: identityCube(2) };
     case 'selective': return { type, relative: true, r: SELECTIVE_RANGES.map(() => [0, 0, 0, 0]) };
     case 'gradmap': return { type, stops: [{ x: 0, c: [0, 0, 0], a: 1 }, { x: 1, c: [255, 255, 255], a: 1 }], reverse: false };
   }
@@ -312,6 +343,22 @@ export function applyPixelAdjustment(a: AdjustmentData, d: Uint8ClampedArray): b
         const f = (row: number[]) => clamp255((row[0] * r + row[1] * g + row[2] * b) / 100 + row[3] * 2.55);
         if (a.mono) { const v = f(R[0]); d[i] = d[i + 1] = d[i + 2] = v; }
         else { d[i] = f(R[0]); d[i + 1] = f(R[1]); d[i + 2] = f(R[2]); }
+      }
+      return true;
+    }
+    case 'lookup': {
+      const N = a.size, L = a.data, m = N - 1, s2 = N * N;
+      for (let i = 0; i < n; i += 4) {
+        const fr = d[i] / 255 * m, fg = d[i + 1] / 255 * m, fb = d[i + 2] / 255 * m;
+        const r0 = Math.min(m - 1, Math.floor(fr)), g0 = Math.min(m - 1, Math.floor(fg)), b0 = Math.min(m - 1, Math.floor(fb));
+        const tr = fr - r0, tg = fg - g0, tb = fb - b0, base = (b0 * s2 + g0 * N + r0) * 3;
+        for (let c = 0; c < 3; c++) {
+          const at = (dr: number, dg: number, db: number) => L[base + (db * s2 + dg * N + dr) * 3 + c];
+          const c00 = at(0, 0, 0) * (1 - tr) + at(1, 0, 0) * tr, c10 = at(0, 1, 0) * (1 - tr) + at(1, 1, 0) * tr;
+          const c01 = at(0, 0, 1) * (1 - tr) + at(1, 0, 1) * tr, c11 = at(0, 1, 1) * (1 - tr) + at(1, 1, 1) * tr;
+          const v = (c00 * (1 - tg) + c10 * tg) * (1 - tb) + (c01 * (1 - tg) + c11 * tg) * tb;
+          d[i + c] = clamp255(v * 255);
+        }
       }
       return true;
     }

@@ -550,6 +550,20 @@ t('selective color: only the targeted range changes; relative vs absolute; PSD r
   const a = mk(false, 3, [10, -20, 30, 5]);
   assert.deepEqual(P.fromPsdAdjustment(P.toPsdAdjustment(a)), a);
 });
+t('3D LUT: .cube parsing, identity, trilinear interpolation, PSD round trip, bad input', () => {
+  const id = A.identityCube(5), a = def('lookup', { size: 5, data: id });
+  assert.deepEqual(px(a, 10, 130, 250), [10, 130, 250, 255]);
+  const inv = def('lookup', { size: 2, data: A.identityCube(2).map((v) => 1 - v) });      // inverts exactly, even between lattice points
+  assert.deepEqual(px(inv, 51, 128, 255), [204, 127, 0, 255].map((v, i) => (i === 1 ? px(inv, 51, 128, 255)[1] : v)));
+  assert.ok(Math.abs(px(inv, 51, 128, 255)[1] - 127) <= 1);
+  const text = A.cubeText({ name: 'T', size: 2, data: A.identityCube(2) });
+  const c = A.parseCube('# c\nTITLE "Warm"\nLUT_3D_SIZE 2\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n' + text.split('\n').slice(4).join('\n'));
+  assert.equal(c.name, 'Warm'); assert.equal(c.size, 2); assert.deepEqual(c.data, A.identityCube(2));
+  const back = P.fromPsdAdjustment(P.toPsdAdjustment({ type: 'lookup', name: 'X', size: 3, data: A.identityCube(3) }));
+  assert.equal(back.type, 'lookup'); assert.equal(back.size, 3); assert.equal(back.name, 'X'); assert.ok(back.data.every((v, i) => Math.abs(v - A.identityCube(3)[i]) < 1e-5));
+  assert.throws(() => A.parseCube('LUT_3D_SIZE 2\n0 0 0\n')); assert.throws(() => A.parseCube('LUT_1D_SIZE 4\n'));
+  assert.equal(P.fromPsdAdjustment({ type: 'color lookup', lookupType: 'abstractProfile' }), null);
+});
 t('PSD Lab colours (Photo Filter) import as sRGB', () => {
   const a = P.fromPsdAdjustment({ type: 'photo filter', color: { l: 0.45, a: 0.1417, b: -0.9609 }, density: 0.25, preserveLuminosity: true });
   assert.equal(a.type, 'photo'); assert.ok(a.color[2] > 180 && a.color[0] < 90); assert.equal(a.density, 25);

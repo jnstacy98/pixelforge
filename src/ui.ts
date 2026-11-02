@@ -173,7 +173,7 @@ export function initPanels() {
   $('ldup').onclick = () => app.doc.duplicateLayer();
   $('ldel').onclick = () => app.doc.removeLayer();
   $('ladj').onclick = (e) => popup(e.currentTarget as HTMLElement,
-    (['levels', 'curves', 'brightness', 'hue', 'invert', 'posterize', 'threshold', 'exposure', 'vibrance', 'bw', 'photo', 'selective', 'balance', 'mixer', 'gradmap'] as AdjustmentType[]).map((t) => [ADJUSTMENT_LABELS[t] + (t === 'invert' ? '' : '…'), () => newAdjustmentLayer(t)]));
+    (['levels', 'curves', 'brightness', 'hue', 'invert', 'posterize', 'threshold', 'exposure', 'vibrance', 'bw', 'photo', 'lookup', 'selective', 'balance', 'mixer', 'gradmap'] as AdjustmentType[]).map((t) => [ADJUSTMENT_LABELS[t] + (t === 'invert' ? '' : '…'), () => newAdjustmentLayer(t)]));
   $('lmask').onclick = () => {
     const d = app.doc;
     if (d.active.mask) return app.toast('Layer already has a mask (Layer ▸ Layer Mask)');

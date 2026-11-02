@@ -485,6 +485,15 @@ await page.evaluate(() => document.querySelector('.adjust-body').__params.set('r
 assert.equal(await page.evaluate(() => document.querySelector('.adjust-body select').value), '4'); ok('Selective Color dialog switches colour range');
 await page.keyboard.press('Enter'); await wait();
 
+await newGray([200, 60, 60]);
+await addAdj('Color Lookup'); await page.waitForSelector('.adjust-body input[type=file]');
+const cubeInv = 'TITLE "Inv"\nLUT_3D_SIZE 2\n' + [0, 1].flatMap((b) => [0, 1].flatMap((g) => [0, 1].map((r) => `${1 - r} ${1 - g} ${1 - b}`))).join('\n') + '\n';
+await page.evaluate((t) => document.querySelector('.adjust-body').__params.set('cube', t), cubeInv);
+const lk = await view(); assert.ok(Math.abs(lk[0] - 55) <= 2 && Math.abs(lk[1] - 195) <= 2, `got ${lk}`); ok('Color Lookup applies a loaded .cube 3D LUT');
+await page.keyboard.press('Enter'); await wait();
+const rt3 = await page.evaluate(() => window.__adjRoundtrip());
+const lkl = rt3.layers.find((l) => l.adj?.type === 'lookup'); assert.ok(lkl && lkl.adj.size === 2 && lkl.adj.name === 'Inv'); ok('PSD round-trip: Color Lookup keeps its 3D LUT');
+
 // PSD round trip keeps the new types
 await newGray([90, 120, 200]);
 await page.evaluate(() => {

@@ -1,7 +1,7 @@
 {
  "read-write__adjustments.psd": {
   "maxMAE": 0.5,
-  "note": "Color Lookup (3D LUT) is still a hidden placeholder"
+  "note": "all 17 adjustment layers render"
  },
  "read-write__effects.psd": {
   "maxMAE": 5.74

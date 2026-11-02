@@ -163,7 +163,7 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'New Adjustment Layer — Brightness/Contrast…', action: () => newAdjustmentLayer('brightness') },
     { label: 'New Adjustment Layer — Hue/Saturation…', action: () => newAdjustmentLayer('hue') },
     { label: 'New Adjustment Layer — Invert', action: () => newAdjustmentLayer('invert') },
-    ...(['posterize', 'threshold', 'exposure', 'vibrance', 'bw', 'photo', 'selective', 'balance', 'mixer', 'gradmap'] as const).map((t) =>
+    ...(['posterize', 'threshold', 'exposure', 'vibrance', 'bw', 'photo', 'lookup', 'selective', 'balance', 'mixer', 'gradmap'] as const).map((t) =>
       ({ label: `New Adjustment Layer — ${ADJUSTMENT_LABELS[t]}…`, action: () => newAdjustmentLayer(t) })),
     ...(app.doc.active.adjustment ? [{ label: 'Edit Adjustment…', action: () => editAdjustment(app.doc.active) }] : []),
     '-',

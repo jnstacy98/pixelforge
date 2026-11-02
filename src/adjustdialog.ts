@@ -382,7 +382,8 @@ type Field =
   | { kind: 'color'; label: string; path: Path }
   | { kind: 'optcolor'; label: string; path: Path; def: A.RGB }     // nullable colour with an enable checkbox
   | { kind: 'stops' }
-  | { kind: 'rangesel' };
+  | { kind: 'rangesel' }
+  | { kind: 'cube' };
 const FIELDS = (a: A.AdjustmentData, sel = 0): Field[] => {
   const r = (label: string, path: Path, min: number, max: number, step = 1): Field => ({ kind: 'range', label, path, min, max, step });
   switch (a.type) {
@@ -400,6 +401,7 @@ const FIELDS = (a: A.AdjustmentData, sel = 0): Field[] => {
       { kind: 'check', label: 'Monochrome', path: ['mono'] },
       ...(a.mono ? [['Gray', 0]] : [['Red', 0], ['Green', 1], ['Blue', 2]]).flatMap(([n, i]) => [
         r(`${n} ← Red`, ['rows', i as number, 0], -200, 200), r(`${n} ← Green`, ['rows', i as number, 1], -200, 200), r(`${n} ← Blue`, ['rows', i as number, 2], -200, 200), r(`${n} const`, ['rows', i as number, 3], -100, 100)])];
+    case 'lookup': return [{ kind: 'cube' }];
     case 'selective': return [{ kind: 'rangesel' }, ...['Cyan', 'Magenta', 'Yellow', 'Black'].map((n, i) => r(n, ['r', sel, i], -100, 100)), { kind: 'check', label: 'Relative (off = Absolute)', path: ['relative'] }];
     case 'gradmap': return [{ kind: 'check', label: 'Reverse', path: ['reverse'] }, { kind: 'stops' }];
     default: return [];
@@ -419,7 +421,18 @@ function paramsDialog(title: string, sess: Sess, init: A.AdjustmentData) {
     const build = () => {
       host.replaceChildren();
       for (const f of FIELDS(cur, sel)) {
-        if (f.kind === 'rangesel') {
+        if (f.kind === 'cube') {
+          const l = cur as Extract<A.AdjustmentData, { type: 'lookup' }>;
+          const info = el('div', { class: 'hint', textContent: l.name ? `${l.name} (${l.size}³)` : 'No LUT loaded (identity)' });
+          const inp = el('input', { type: 'file', accept: '.cube,.CUBE' });
+          const apply = (text: string, fallback: string) => {
+            try { const c = A.parseCube(text); l.name = c.name || fallback; l.size = c.size; l.data = c.data; info.textContent = `${l.name} (${l.size}³)`; preview(); }
+            catch (e) { info.textContent = 'Could not read LUT: ' + (e as Error).message; }
+          };
+          inp.onchange = async () => { const f = inp.files?.[0]; if (f) apply(await f.text(), f.name.replace(/\.cube$/i, '')); };
+          ctl.cube = (text: string) => apply(text, 'LUT');
+          host.append(el('div', { class: 'row' }, 'Load a .cube 3D LUT: ', inp), info);
+        } else if (f.kind === 'rangesel') {
           const o = el('select');
           A.SELECTIVE_RANGES.forEach((n, i) => o.append(el('option', { value: String(i), textContent: n, selected: i === sel })));
           o.onchange = () => { sel = Number(o.value); build(); };
