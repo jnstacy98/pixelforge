@@ -2,8 +2,9 @@
 // gradient geometry and conversion to/from PSD effect records. Unit-tested in Node.
 import type { Color, LayerEffectsInfo } from 'ag-psd';
 
-export interface ShadowFx { on: boolean; color: string; opacity: number; blend: string; angle: number; distance: number; spread: number; size: number }
-export interface GlowFx { on: boolean; color: string; opacity: number; blend: string; spread: number; size: number }
+import { contourLUT, fromPsdContour, mapContour, toPsdContour, type Contour } from './contour.ts';
+export interface ShadowFx { on: boolean; color: string; opacity: number; blend: string; angle: number; distance: number; spread: number; size: number; contour?: Contour }
+export interface GlowFx { on: boolean; color: string; opacity: number; blend: string; spread: number; size: number; contour?: Contour }
 export interface StrokeFx { on: boolean; color: string; opacity: number; blend: string; size: number; position: 'outside' | 'inside' | 'center' }
 export interface OverlayFx { on: boolean; color: string; opacity: number; blend: string }
 export interface GradientStop { at: number; color: string; alpha: number }
@@ -13,7 +14,7 @@ export interface GradientFx {
   style?: 'linear' | 'radial' | 'angle' | 'reflected' | 'diamond'; scale?: number; stops?: GradientStop[];
 }
 export interface PatternFx { on: boolean; id: string; name: string; opacity: number; blend: string; scale: number; angle: number; phase: { x: number; y: number } }
-export interface SatinFx { on: boolean; color: string; opacity: number; blend: string; angle: number; distance: number; size: number; invert: boolean }
+export interface SatinFx { on: boolean; color: string; opacity: number; blend: string; angle: number; distance: number; size: number; invert: boolean; contour?: Contour }
 export interface BevelFx {
   on: boolean;
   style: 'inner' | 'outer' | 'emboss' | 'pillow' | 'stroke';
@@ -23,6 +24,8 @@ export interface BevelFx {
   size: number; soften: number; angle: number; altitude: number;
   hiColor: string; hiBlend: string; hiOpacity: number;
   shColor: string; shBlend: string; shOpacity: number;
+  /** Shape contour (reshapes the bevel's profile) and gloss contour (reshapes the lighting). */
+  contour?: Contour; glossContour?: Contour;
 }
 export interface LayerEffects {
   bevel?: BevelFx;
@@ -186,6 +189,7 @@ export function bevelHeight(cov: Float32Array, w: number, h: number, b: BevelFx,
   const dOut = distanceTo(m, w, h), dIn = distanceTo(inv, w, h);
   const size = Math.max(0.5, b.size);
   const profile = b.technique === 'smooth' ? (t: number) => t * t * (3 - 2 * t) : (t: number) => t;
+  const cl = contourLUT(b.contour), shape2 = cl ? (t: number) => profile(mapContour(cl, t)) : profile;
   const out = new Float32Array(n), amp = (b.depth / 100) * size * (b.direction === 'down' ? -1 : 1);
   for (let i = 0; i < n; i++) {
     const s = m[i] ? dIn[i] - 0.5 : -(dOut[i] - 0.5);               // signed distance to the edge: + inside, − outside
@@ -196,7 +200,7 @@ export function bevelHeight(cov: Float32Array, w: number, h: number, b: BevelFx,
       case 'pillow': t = clamp01(Math.abs(s) / (size / 2)); break;
       default: t = s > 0 ? clamp01(s / size) : 0;                    // inner / stroke emboss
     }
-    out[i] = profile(t) * amp;
+    out[i] = shape2(t) * amp;
   }
   // soften (+ a hair of anti-aliasing to hide the distance transform's pixel steps; chisel-soft is slightly rounder)
   const sigma = Math.hypot(b.soften, b.technique === 'soft' ? size * 0.12 : 0, 0.7);
@@ -210,7 +214,7 @@ export function bevelHeight(cov: Float32Array, w: number, h: number, b: BevelFx,
  * saturation rather than Lambertian cosines, so strength grows monotonically with depth (like Photoshop's Depth slider)
  * instead of falling again once a face is steeper than the light.
  */
-export function bevelShade(height: Float32Array, w: number, h: number, angle: number, altitude: number) {
+export function bevelShade(height: Float32Array, w: number, h: number, angle: number, altitude: number, gloss?: Contour) {
   const a = (angle * Math.PI) / 180, alt = (altitude * Math.PI) / 180;
   const lx = Math.cos(alt) * Math.cos(a), ly = -Math.cos(alt) * Math.sin(a), norm = Math.max(0.25, 1 - Math.sin(alt));
   const hi = new Float32Array(w * h), sh = new Float32Array(w * h);
@@ -220,6 +224,8 @@ export function bevelShade(height: Float32Array, w: number, h: number, angle: nu
     const d = -(gx * lx + gy * ly) / norm;                                 // + : the surface faces the light, − : faces away
     if (d > 0) hi[i] = 1 - Math.exp(-1.4 * d); else sh[i] = 1 - Math.exp(1.4 * d);
   }
+  const gl = contourLUT(gloss);
+  if (gl) for (let i = 0; i < hi.length; i++) { hi[i] = mapContour(gl, hi[i]); sh[i] = mapContour(gl, sh[i]); }
   return { hi, sh };
 }
 
@@ -246,8 +252,9 @@ const BEVEL_TECH_OUT = { smooth: 'smooth', hard: 'chisel hard', soft: 'chisel so
 const invert = <T extends Record<string, string>>(o: T) => Object.fromEntries(Object.entries(o).map(([k, v]) => [v, k])) as Record<string, string>;
 export function toPsdEffects(e: LayerEffects): LayerEffectsInfo {
   const out: LayerEffectsInfo = {};
-  const shadow = (s: ShadowFx) => ({ present: true, showInDialog: true, enabled: s.on, size: px(s.size), angle: s.angle, distance: px(s.distance), color: toColor(s.color), blendMode: s.blend as never, opacity: s.opacity, useGlobalLight: false, antialiased: true, ...choke(s.spread) });
-  const glow = (g: GlowFx) => ({ present: true, showInDialog: true, enabled: g.on, size: px(g.size), color: toColor(g.color), blendMode: g.blend as never, opacity: g.opacity, source: 'edge' as const, technique: 'softer' as never, antialiased: true, ...choke(g.spread) });
+  const cv = (c: Contour | undefined) => { const o = toPsdContour(c); return o ? { contour: o } : {}; };
+  const shadow = (s: ShadowFx) => ({ present: true, showInDialog: true, enabled: s.on, size: px(s.size), angle: s.angle, distance: px(s.distance), color: toColor(s.color), blendMode: s.blend as never, opacity: s.opacity, useGlobalLight: false, antialiased: true, ...choke(s.spread), ...cv(s.contour) });
+  const glow = (g: GlowFx) => ({ present: true, showInDialog: true, enabled: g.on, size: px(g.size), color: toColor(g.color), blendMode: g.blend as never, opacity: g.opacity, source: 'edge' as const, technique: 'softer' as never, antialiased: true, ...choke(g.spread), ...cv(g.contour) });
   if (e.dropShadow) out.dropShadow = [shadow(e.dropShadow)];
   if (e.innerShadow) out.innerShadow = [shadow(e.innerShadow)];
   if (e.outerGlow) out.outerGlow = glow(e.outerGlow);
@@ -257,7 +264,7 @@ export function toPsdEffects(e: LayerEffects): LayerEffectsInfo {
     const v = e.bevel;
     out.bevel = { present: true, showInDialog: true, enabled: v.on, size: px(v.size), angle: v.angle, strength: v.depth / 100, highlightBlendMode: v.hiBlend as never, shadowBlendMode: v.shBlend as never,
       highlightColor: toColor(v.hiColor), shadowColor: toColor(v.shColor), style: BEVEL_STYLE_OUT[v.style], highlightOpacity: v.hiOpacity, shadowOpacity: v.shOpacity, soften: px(v.soften), useGlobalLight: false,
-      altitude: v.altitude, technique: BEVEL_TECH_OUT[v.technique], direction: v.direction, antialiased: true };
+      altitude: v.altitude, technique: BEVEL_TECH_OUT[v.technique], direction: v.direction, antialiased: true, ...cv(v.glossContour), ...(v.contour ? { shapeContour: toPsdContour(v.contour) } : {}) };
   }
   if (e.stroke) out.stroke = [{ present: true, showInDialog: true, enabled: e.stroke.on, size: px(e.stroke.size), position: e.stroke.position, fillType: 'color', blendMode: e.stroke.blend as never, opacity: e.stroke.opacity, color: toColor(e.stroke.color) }];
   if (e.gradientOverlay) {
@@ -273,7 +280,7 @@ export function toPsdEffects(e: LayerEffects): LayerEffectsInfo {
   }
   if (e.satin) {
     const s = e.satin;
-    out.satin = { present: true, showInDialog: true, enabled: s.on, size: px(s.size), blendMode: s.blend as never, color: toColor(s.color), antialiased: true, opacity: s.opacity, distance: px(s.distance), angle: s.angle, invert: s.invert };
+    out.satin = { present: true, showInDialog: true, enabled: s.on, size: px(s.size), blendMode: s.blend as never, color: toColor(s.color), antialiased: true, opacity: s.opacity, distance: px(s.distance), angle: s.angle, invert: s.invert, ...cv(s.contour) };
   }
   return out;
 }
@@ -284,14 +291,15 @@ export function fromPsdEffects(e: LayerEffectsInfo, globalLight?: { angle: numbe
   /** An effect flagged "use global light" follows the document's light angle, not the angle stored with the effect. */
   const ang = (own: number | undefined, glob: boolean | undefined, d: number) => (glob && globalLight ? globalLight.angle : own ?? d);
   const dis = !!e.disabled;
+  const cin = (c: Parameters<typeof fromPsdContour>[0]) => { const o = fromPsdContour(c); return o ? { contour: o } : {}; };
   const shadow = (s: NonNullable<LayerEffectsInfo['dropShadow']>[number], k: 'dropShadow' | 'innerShadow') => {
     const d = defaultFx(k);
-    return { ...d, on: !dis && s.enabled !== false, color: s.color ? fromColor(s.color) : d.color, opacity: s.opacity ?? d.opacity, blend: blendIn(s.blendMode, d.blend), angle: ang(s.angle, s.useGlobalLight, d.angle), distance: val(s.distance, d.distance), spread: val(s.choke, 0), size: val(s.size, d.size) };
+    return { ...d, on: !dis && s.enabled !== false, color: s.color ? fromColor(s.color) : d.color, opacity: s.opacity ?? d.opacity, blend: blendIn(s.blendMode, d.blend), angle: ang(s.angle, s.useGlobalLight, d.angle), distance: val(s.distance, d.distance), spread: val(s.choke, 0), size: val(s.size, d.size), ...cin(s.contour) };
   };
   const glow = (g: NonNullable<LayerEffectsInfo['outerGlow']>, k: 'outerGlow' | 'innerGlow') => {
     const d = defaultFx(k);
     if (g.source === 'center') unsupported.push('inner glow from center (drawn from edge)');
-    return { ...d, on: !dis && g.enabled !== false, color: g.color ? fromColor(g.color) : d.color, opacity: g.opacity ?? d.opacity, blend: blendIn(g.blendMode, d.blend), spread: val(g.choke, 0), size: val(g.size, d.size) };
+    return { ...d, on: !dis && g.enabled !== false, color: g.color ? fromColor(g.color) : d.color, opacity: g.opacity ?? d.opacity, blend: blendIn(g.blendMode, d.blend), spread: val(g.choke, 0), size: val(g.size, d.size), ...cin(g.contour) };
   };
   if (e.dropShadow?.[0]) fx.dropShadow = shadow(e.dropShadow[0], 'dropShadow');
   if (e.innerShadow?.[0]) fx.innerShadow = shadow(e.innerShadow[0], 'innerShadow');
@@ -324,7 +332,7 @@ export function fromPsdEffects(e: LayerEffectsInfo, globalLight?: { angle: numbe
   const sa = e.satin;
   if (sa) {
     const d = defaultFx('satin');
-    fx.satin = { ...d, on: !dis && sa.enabled !== false, color: sa.color ? fromColor(sa.color) : d.color, opacity: sa.opacity ?? d.opacity, blend: blendIn(sa.blendMode, d.blend), angle: sa.angle ?? d.angle, distance: val(sa.distance, d.distance), size: val(sa.size, d.size), invert: sa.invert ?? d.invert };
+    fx.satin = { ...d, on: !dis && sa.enabled !== false, color: sa.color ? fromColor(sa.color) : d.color, opacity: sa.opacity ?? d.opacity, blend: blendIn(sa.blendMode, d.blend), angle: sa.angle ?? d.angle, distance: val(sa.distance, d.distance), size: val(sa.size, d.size), invert: sa.invert ?? d.invert, ...cin(sa.contour) };
   }
   if (e.bevel) {
     const v = e.bevel, d = defaultFx('bevel');
@@ -333,7 +341,9 @@ export function fromPsdEffects(e: LayerEffectsInfo, globalLight?: { angle: numbe
       hiColor: v.highlightColor ? fromColor(v.highlightColor) : d.hiColor, hiBlend: blendIn(v.highlightBlendMode, d.hiBlend), hiOpacity: v.highlightOpacity ?? d.hiOpacity,
       shColor: v.shadowColor ? fromColor(v.shadowColor) : d.shColor, shBlend: blendIn(v.shadowBlendMode, d.shBlend), shOpacity: v.shadowOpacity ?? d.shOpacity };
     if (v.useTexture) unsupported.push('bevel texture');
-    if (v.contour && v.contour.name && !/linear/i.test(v.contour.name)) unsupported.push('bevel gloss contour');
+    const gc = fromPsdContour(v.contour), sc = fromPsdContour(v.shapeContour);
+    if (gc) fx.bevel.glossContour = gc;
+    if (sc) fx.bevel.contour = sc;
   }
   const po = e.patternOverlay;
   if (po) {

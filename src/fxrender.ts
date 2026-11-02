@@ -1,3 +1,4 @@
+import { contourLUT, mapContour, type Contour } from './contour';
 import { tileCanvas } from './patterns';
 import { blendOp, ctxOf, makeCanvas, type Rect } from './doc';
 import { bevelHeight, bevelShade, fxMargin, gradientEnds, growCoverage, hexToRgb, ringCoverage, shadowOffset, softEdge, type GradientFx, type LayerEffects } from './fx';
@@ -23,9 +24,13 @@ function blurred(c: HTMLCanvasElement, sigma: number) {
   return o;
 }
 /** A soft shadow/glow of `cov` in `hex`: opaque at the edge, fading out over `size` px (see softEdge). */
-function soft(cov: Float32Array, w: number, h: number, hex: string, size: number, spread: number, kind: 'shadow' | 'glow' = 'shadow') {
-  const { grow, sigma } = softEdge(size, spread, kind);
-  return blurred(colored(growCoverage(cov, w, h, grow), w, h, hex), sigma);
+function soft(cov: Float32Array, w: number, h: number, hex: string, size: number, spread: number, kind: 'shadow' | 'glow' = 'shadow', contour?: Contour) {
+  const { grow, sigma } = softEdge(size, spread, kind), out = blurred(colored(growCoverage(cov, w, h, grow), w, h, hex), sigma), lut = contourLUT(contour);
+  if (!lut) return out;
+  const c = makeCanvas(w, h), x = ctxOf(c), img = ctxOf(out).getImageData(0, 0, w, h), d = img.data;   // the contour reshapes the falloff (alpha)
+  for (let i = 3; i < d.length; i += 4) d[i] = Math.round(mapContour(lut, d[i] / 255) * 255);
+  x.putImageData(img, 0, 0);
+  return c;
 }
 
 /**
@@ -78,12 +83,12 @@ export function renderStyled(shape: HTMLCanvasElement, fx: LayerEffects, fill: n
   const ds = fx.dropShadow;
   if (ds?.on) {
     const { dx, dy } = shadowOffset(ds.angle, ds.distance), k = makeCanvas(w, h);
-    ctxOf(k).drawImage(soft(A, w, h, ds.color, ds.size, ds.spread), dx, dy);
+    ctxOf(k).drawImage(soft(A, w, h, ds.color, ds.size, ds.spread, 'shadow', ds.contour), dx, dy);
     if (fill < 1) clip(k, 'destination-out');                                  // "layer knocks out drop shadow"
     under.push({ canvas: k, x: R.x, y: R.y, opacity: ds.opacity, blend: ds.blend });
   }
   const og = fx.outerGlow;
-  if (og?.on) under.push({ canvas: knock(soft(A, w, h, og.color, og.size, og.spread, 'glow'), 0, 0), x: R.x, y: R.y, opacity: og.opacity, blend: og.blend });
+  if (og?.on) under.push({ canvas: knock(soft(A, w, h, og.color, og.size, og.spread, 'glow', og.contour), 0, 0), x: R.x, y: R.y, opacity: og.opacity, blend: og.blend });
   ox.globalAlpha = fill; ox.drawImage(S, 0, 0); ox.globalAlpha = 1;                       // the layer's own pixels
   const po = fx.patternOverlay;
   if (po?.on) {
@@ -110,18 +115,19 @@ export function renderStyled(shape: HTMLCanvasElement, fx: LayerEffects, fill: n
     const one = (sx: number, sy: number) => { const c = makeCanvas(w, h), cx = ctxOf(c); cx.filter = `blur(${sigma}px)`; cx.drawImage(S, sx, sy); return cx.getImageData(0, 0, w, h).data; };
     const p1 = one(dx, dy), p2 = one(-dx, -dy), v = new Float32Array(w * h);
     for (let i = 0; i < v.length; i++) { const d = Math.abs(p1[i * 4 + 3] - p2[i * 4 + 3]) / 255; v[i] = (sa.invert ? 1 - d : d) * A[i]; }
+    const sl = contourLUT(sa.contour); if (sl) for (let i = 0; i < v.length; i++) v[i] = mapContour(sl, v[i]);
     put(colored(v, w, h, sa.color), sa.opacity, sa.blend);
   }
   const ig = fx.innerGlow;
-  if (ig?.on) put(clip(soft(B, w, h, ig.color, ig.size, ig.spread, 'glow'), 'destination-in'), ig.opacity, ig.blend);
+  if (ig?.on) put(clip(soft(B, w, h, ig.color, ig.size, ig.spread, 'glow', ig.contour), 'destination-in'), ig.opacity, ig.blend);
   const is = fx.innerShadow;
-  if (is?.on) { const { dx, dy } = shadowOffset(is.angle, is.distance), s = soft(B, w, h, is.color, is.size, is.spread), sh = makeCanvas(w, h); ctxOf(sh).drawImage(s, dx, dy); put(clip(sh, 'destination-in'), is.opacity, is.blend); }
+  if (is?.on) { const { dx, dy } = shadowOffset(is.angle, is.distance), s = soft(B, w, h, is.color, is.size, is.spread, 'shadow', is.contour), sh = makeCanvas(w, h); ctxOf(sh).drawImage(s, dx, dy); put(clip(sh, 'destination-in'), is.opacity, is.blend); }
   // Bevel & Emboss: light a height map made from the shape's edge (highlights where it faces the light, shadows where it faces away)
   const bv = fx.bevel, st = fx.stroke;
   const drawBevel = () => {
     if (!bv?.on) return;
     const ring = bv.style === 'stroke' && st?.on ? ringCoverage(A, w, h, st.size, st.position) : null;
-    const { hi, sh } = bevelShade(bevelHeight(A, w, h, bv, ring), w, h, bv.angle, bv.altitude);
+    const { hi, sh } = bevelShade(bevelHeight(A, w, h, bv, ring), w, h, bv.angle, bv.altitude, bv.glossContour);
     const region = bv.style === 'inner' ? A : bv.style === 'outer' ? B : bv.style === 'stroke' ? ring : null;      // emboss / pillow shade both sides of the edge
     if (bv.style === 'stroke' && !ring) return;
     if (region) for (let p = 0; p < hi.length; p++) { hi[p] *= region[p]; sh[p] *= region[p]; }

@@ -2096,6 +2096,41 @@ await page.locator('#menubar .menu .title:text-is("Layer")').click(); await page
 await page.waitForSelector('.sf-panel'); await page.waitForFunction(() => window.__app.doc.layers[0].smart); ok('opening Smart Filters on an ordinary layer converts it to a smart object first');
 await page.keyboard.press('Escape'); await wait();
 
+// 6af. layer style contours
+await styleScene();
+await fxOpen('Drop Shadow');
+const SH0 = { on: true, color: '#000000', opacity: 1, blend: 'normal', angle: 90, distance: 0, spread: 0, size: 24 };
+await fxSet('dropShadow', SH0);
+const prof = async () => { const r = []; for (const d of [1, 4, 8, 12, 18]) r.push(dark(await cpx(150, 200 + d))); return r; };
+const lin = await prof();
+assert.ok(lin.every((v, i) => !i || v <= lin[i - 1] + 1) && lin[0] > 100); ok('without a contour the shadow fades steadily away from the edge');
+await fxSet('dropShadow', { contour: { name: 'Cone' } });
+const cone = await prof();
+assert.ok(cone[0] > lin[0] * 1.6 && cone[2] > lin[2] * 1.6 && cone[4] <= lin[4] * 3 + 12); ok('the Cone contour roughly doubles the falloff: the shadow is dense near the edge and still dies out');
+await fxSet('dropShadow', { contour: { name: 'Ring - Double' } });
+const rr = await prof(); assert.ok(rr.some((v, i) => i && v > rr[i - 1] + 15) || Math.max(...rr.slice(1)) > rr[0]); ok('Ring - Double gives banded shadows (the darkness goes up again further out)');
+await fxSet('dropShadow', { contour: undefined });
+assert.deepEqual(await prof(), lin); ok('removing the contour restores the plain profile exactly');
+// through the Layer Style dialog's menu
+await page.evaluate(() => { const s = [...document.querySelectorAll('.fx-panel select')].find((x) => [...x.options].some((o) => o.value === 'Ring - Double')); s.value = 'Ring - Double'; s.dispatchEvent(new Event('change', { bubbles: true })); });
+await page.waitForTimeout(250);
+assert.equal(await gx(`return ${G.byName('Box')}.effects.dropShadow.contour.name`), 'Ring - Double'); ok('the Layer Style dialog has a Contour menu (with a preview of the curve)');
+assert.ok(await page.evaluate(() => !!document.querySelector('.fx-panel canvas')));
+await fxOK();
+const ringed = await prof(); assert.notDeepEqual(ringed, lin);
+// glow, satin and bevel accept contours too
+const glowAt = async (extra) => { await gx(`${G.byName('Box')}.effects = { outerGlow: { on: true, color: '#000000', opacity: 1, blend: 'normal', spread: 0, size: 24 ${extra} } }; d.emit('structure')`); await wait(); const r = []; for (const d of [1, 6, 12, 18]) r.push(dark(await cpx(150, 200 + d))); return r; };
+const glPlain = await glowAt(''), glRing = await glowAt(", contour: { name: 'Ring - Double' }");
+assert.ok(glPlain[0] > 50); assert.notDeepEqual(glPlain, glRing); ok('outer glow honours a contour as well');
+await gx(`${G.byName('Box')}.effects = { satin: { on: true, color: '#000000', opacity: 1, blend: 'normal', angle: 19, distance: 11, size: 14, invert: true, contour: { name: 'Cone' } } }; d.emit('structure')`); await wait();
+const satC = await cpx(150, 150), satNo = await (async () => { await gx(`${G.byName('Box')}.effects = { satin: { on: true, color: '#000000', opacity: 1, blend: 'normal', angle: 19, distance: 11, size: 14, invert: true } }; d.emit('structure')`); await wait(); return cpx(150, 150); })();
+assert.notDeepEqual(satC, satNo); ok('satin honours a contour');
+const bevelAt = async (extra) => { await gx(`${G.byName('Box')}.effects = { bevel: { on: true, style: 'inner', technique: 'smooth', depth: 100, direction: 'up', size: 10, soften: 0, angle: 120, altitude: 30, hiColor: '#ffffff', hiBlend: 'normal', hiOpacity: 1, shColor: '#000000', shBlend: 'normal', shOpacity: 1 ${extra} } }; d.emit('structure')`); await wait(); const r = []; for (let d = 0; d < 12; d += 2) r.push((await cpx(100 + d, 150))[0]); return r; };
+const bPlain = await bevelAt(''), bShape = await bevelAt(", contour: { name: 'Cone' }"), bGloss = await bevelAt(", glossContour: { name: 'Ring' }");
+assert.notDeepEqual(bPlain, bShape); assert.notDeepEqual(bPlain, bGloss); ok('a bevel’s Contour reshapes its profile and its Gloss contour reshapes its lighting');
+const rtC = await page.evaluate(() => window.__fxRoundtrip([[150, 150], [101, 150]]));
+assert.deepEqual(rtC.fxAfter.Box.effects.bevel.glossContour, { name: 'Ring' }); ok('contours survive a PSD round trip (the gloss contour comes back as the Ring preset)');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

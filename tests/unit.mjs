@@ -298,6 +298,30 @@ t('smart filters: blurs, sharpen, noise, mosaic, invert, brightness; PSD convers
   const off = mk(() => [1, 2, 3, 255]); const o2 = off.slice(); SF.applySmartFilters([{ kind: 'invert', on: false, p: {} }], o2, W, H); assert.deepEqual([...o2], [...off]);                                                 // disabled filters do nothing
 });
 
+import * as CT from '../src/contour.ts';
+t('contours: presets as tables, custom curves, smooth vs stepped, effect usage, PSD round trip', () => {
+  assert.equal(CT.contourLUT(undefined), null); assert.equal(CT.contourLUT({ name: 'Linear' }), null);
+  for (const n of CT.CONTOUR_NAMES) { const l = CT.contourLUT({ name: n }); if (n === 'Linear') continue; assert.ok(l && l.length === 256 && [...l].every((v) => v >= 0 && v <= 1), n); }
+  const cone = CT.contourLUT({ name: 'Cone' }); assert.ok(Math.abs(cone[0]) < 1e-9 && Math.abs(cone[128] - 1) < 0.01 && Math.abs(cone[64] - 0.5) < 0.01 && cone[255] < 0.01);
+  const inv = CT.contourLUT({ name: 'Cone - Inverted' }); assert.ok(inv[0] > 0.99 && inv[128] < 0.01 && inv[255] > 0.99);
+  const cove = CT.contourLUT({ name: 'Cove - Deep' }); assert.ok(cove[40] > 0.45 && cove[255] > 0.99); for (let i = 1; i < 256; i++) assert.ok(cove[i] >= cove[i - 1] - 1e-6, 'smooth presets built from rising points stay monotone');
+  const steps = CT.contourLUT({ name: 'Rounded Steps' }); assert.ok(steps[30] === 0 && Math.abs(steps[110] - 85 / 255) < 0.02);
+  const saw = CT.contourLUT({ name: 'Saw Tooth 1' }); assert.ok(saw[80] > 0.9 && saw[90] < 0.1);                         // a vertical jump
+  const custom = CT.contourLUT({ name: 'Mine', pts: [[0, 255], [255, 0]] }); assert.ok(Math.abs(custom[0] - 1) < 1e-9 && Math.abs(custom[255]) < 1e-9 && Math.abs(custom[128] - 0.5) < 0.01);
+  assert.ok(Math.abs(CT.mapContour(cone, 0.5) - 1) < 0.01 && Math.abs(CT.mapContour(cone, 0.25) - 0.5) < 0.02);
+  const f = new Float32Array([0, 0.25, 0.5, 1]); CT.remapField(f, cone); assert.ok(Math.abs(f[1] - 0.5) < 0.02 && f[3] < 0.01);
+  // round trip through PSD effects
+  const fx = { dropShadow: { ...F.defaultFx('dropShadow'), contour: { name: 'Cove - Deep' } }, outerGlow: { ...F.defaultFx('outerGlow'), contour: { name: 'Mine', pts: [[0, 0], [100, 200], [255, 255]] } }, satin: { ...F.defaultFx('satin'), contour: { name: 'Gaussian' } }, bevel: { ...F.defaultFx('bevel'), contour: { name: 'Cone' }, glossContour: { name: 'Ring' } } };
+  const back = F.fromPsdEffects(F.toPsdEffects(fx)); assert.deepEqual(back.fx, fx); assert.deepEqual(back.unsupported, []);
+  assert.equal(F.fromPsdEffects(F.toPsdEffects({ dropShadow: F.defaultFx('dropShadow') })).fx.dropShadow.contour, undefined);              // no contour = linear = nothing stored
+  assert.equal(CT.fromPsdContour({ name: 'Linear', curve: [{ x: 0, y: 0 }, { x: 255, y: 255 }] }), undefined);
+  // the bevel's shape contour changes the height profile; the gloss contour changes the lighting
+  const cov = new Float32Array(41 * 41); for (let y = 10; y < 31; y++) for (let x = 10; x < 31; x++) cov[y * 41 + x] = 1;
+  const b0 = F.defaultFx('bevel'), h0 = F.bevelHeight(cov, 41, 41, { ...b0, size: 8 }), h1 = F.bevelHeight(cov, 41, 41, { ...b0, size: 8, contour: { name: 'Cone' } });
+  assert.notDeepEqual([...h0].map((v) => Math.round(v * 1000)), [...h1].map((v) => Math.round(v * 1000)));
+  const s0 = F.bevelShade(h0, 41, 41, 120, 30), s1 = F.bevelShade(h0, 41, 41, 120, 30, { name: 'Cone - Inverted' }); assert.ok(s0.hi.some((v, i) => Math.abs(v - s1.hi[i]) > 0.1));
+});
+
 // ---- smart objects
 import * as SM from '../src/smartmath.ts';
 t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {
@@ -667,9 +691,11 @@ t('PSD bevel strength is a fraction (1 = 100%): read 100× off before real Photo
   assert.equal(F.fromPsdEffects({ bevel: { enabled: true, strength: 2.4 } }).fx.bevel.depth, 240);
   assert.equal(F.toPsdEffects({ bevel: bev({ depth: 150 }) }).bevel.strength, 1.5);
 });
-t('bevel textures / gloss contours in PSDs are reported, the bevel itself is kept', () => {
-  const r = F.fromPsdEffects({ bevel: { enabled: true, style: 'inner bevel', size: { units: 'Pixels', value: 7 }, useTexture: true, contour: { name: 'Ring', curve: [] } } });
-  assert.ok(r.fx.bevel.on && r.fx.bevel.size === 7); assert.deepEqual(r.unsupported, ['bevel texture', 'bevel gloss contour']);
+t('bevel textures in PSDs are reported (gloss / shape contours are imported), the bevel itself is kept', () => {
+  const ring = { name: 'Ring', curve: [[0, 0], [64, 255], [128, 0], [255, 0]].map(([x, y]) => ({ x, y })) };
+  const r = F.fromPsdEffects({ bevel: { enabled: true, style: 'inner bevel', size: { units: 'Pixels', value: 7 }, useTexture: true, contour: ring, shapeContour: { name: 'Cone', curve: [[0, 0], [128, 255], [255, 0]].map(([x, y]) => ({ x, y })) } } });
+  assert.ok(r.fx.bevel.on && r.fx.bevel.size === 7); assert.deepEqual(r.unsupported, ['bevel texture']);
+  assert.deepEqual(r.fx.bevel.glossContour, { name: 'Ring' }); assert.deepEqual(r.fx.bevel.contour, { name: 'Cone' });
 });
 
 // ---- content-aware fill (async: tests are queued and awaited below)

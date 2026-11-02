@@ -1,6 +1,7 @@
 import { app } from './state';
 import { BLEND_MODES, type Layer } from './doc';
 import { allPatterns, definePattern, hasPattern, getPattern } from './patterns';
+import { CONTOUR_NAMES, contourLUT, type Contour } from './contour';
 import { FX_LABELS, FX_ORDER, cloneFx, defaultFx, sameFx, type FxKind, type LayerEffects } from './fx';
 
 let busy = false;
@@ -71,12 +72,30 @@ export function openLayerStyle(layer: Layer = app.doc.active, focus?: FxKind) {
     s.value = d[key] as string; s.onchange = () => { d[key] = s.value; changed(); };
     return [s];
   };
+  /** Contour picker: a preset menu with a small preview of the curve (imported custom curves are shown as "Custom"). */
+  const contour = (d: Record<string, unknown>, key = 'contour', label = 'Contour') => {
+    const sel = el('select'), cv = el('canvas', { width: 56, height: 30 });
+    const cur = () => d[key] as Contour | undefined;
+    const custom = cur()?.pts && !CONTOUR_NAMES.includes(cur()!.name) ? cur()!.name : null;
+    sel.innerHTML = CONTOUR_NAMES.map((n) => `<option value="${n}">${n}</option>`).join('') + (custom ? `<option value="__custom">Custom: ${custom.replace(/[<&"]/g, '')}</option>` : '');
+    sel.value = custom ? '__custom' : cur()?.name ?? 'Linear';
+    const draw = () => {
+      const x = cv.getContext('2d')!, lut = contourLUT(cur());
+      x.fillStyle = '#1b1b1b'; x.fillRect(0, 0, 56, 30); x.strokeStyle = '#555'; x.beginPath(); x.moveTo(0, 29.5); x.lineTo(56, 0.5); x.stroke();
+      x.strokeStyle = '#fff'; x.beginPath();
+      for (let i = 0; i < 56; i++) { const v = lut ? lut[Math.round((i / 55) * 255)] : i / 55; (i ? x.lineTo : x.moveTo).call(x, i, 29 - v * 28); }
+      x.stroke();
+    };
+    sel.onchange = () => { if (sel.value === '__custom') return; if (sel.value === 'Linear') delete d[key]; else d[key] = { name: sel.value }; draw(); changed(); };
+    draw();
+    return row(label, sel, cv);
+  };
   const common = (d: Record<string, unknown>) => [row('Blend', ...blend(d)), row('Opacity %', ...range(d, 'opacity', 0, 1, 0.01, 100))];
   const controls: Record<FxKind, (d: never) => HTMLElement[]> = {
-    dropShadow: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color')), row('Angle °', ...range(d, 'angle', 0, 360)), row('Distance', ...range(d, 'distance', 0, 100)), row('Spread %', ...range(d, 'spread', 0, 100)), row('Size', ...range(d, 'size', 0, 100))] as never,
-    innerShadow: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color')), row('Angle °', ...range(d, 'angle', 0, 360)), row('Distance', ...range(d, 'distance', 0, 100)), row('Choke %', ...range(d, 'spread', 0, 100)), row('Size', ...range(d, 'size', 0, 100))] as never,
-    outerGlow: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color')), row('Spread %', ...range(d, 'spread', 0, 100)), row('Size', ...range(d, 'size', 0, 100))] as never,
-    innerGlow: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color')), row('Choke %', ...range(d, 'spread', 0, 100)), row('Size', ...range(d, 'size', 0, 100))] as never,
+    dropShadow: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color')), row('Angle °', ...range(d, 'angle', 0, 360)), row('Distance', ...range(d, 'distance', 0, 100)), row('Spread %', ...range(d, 'spread', 0, 100)), row('Size', ...range(d, 'size', 0, 100)), contour(d)] as never,
+    innerShadow: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color')), row('Angle °', ...range(d, 'angle', 0, 360)), row('Distance', ...range(d, 'distance', 0, 100)), row('Choke %', ...range(d, 'spread', 0, 100)), row('Size', ...range(d, 'size', 0, 100)), contour(d)] as never,
+    outerGlow: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color')), row('Spread %', ...range(d, 'spread', 0, 100)), row('Size', ...range(d, 'size', 0, 100)), contour(d)] as never,
+    innerGlow: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color')), row('Choke %', ...range(d, 'spread', 0, 100)), row('Size', ...range(d, 'size', 0, 100)), contour(d)] as never,
     colorOverlay: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color'))] as never,
     gradientOverlay: (d: Record<string, unknown>) => {
       const rev = el('input', { type: 'checkbox', checked: !!d.reverse }); rev.onchange = () => { d.reverse = rev.checked; changed(); };
@@ -115,14 +134,14 @@ export function openLayerStyle(layer: Layer = app.doc.active, focus?: FxKind) {
     },
     satin: (d: Record<string, unknown>) => {
       const inv = el('input', { type: 'checkbox', checked: !!d.invert }); inv.onchange = () => { d.invert = inv.checked; changed(); };
-      return [...common(d), row('Color', ...color(d, 'color')), row('Angle °', ...range(d, 'angle', 0, 360)), row('Distance', ...range(d, 'distance', 0, 60)), row('Size', ...range(d, 'size', 0, 60)), row('Invert', inv)] as never;
+      return [...common(d), row('Color', ...color(d, 'color')), row('Angle °', ...range(d, 'angle', 0, 360)), row('Distance', ...range(d, 'distance', 0, 60)), row('Size', ...range(d, 'size', 0, 60)), contour(d), row('Invert', inv)] as never;
     },
     bevel: (d: Record<string, unknown>) => [
       row('Style', ...choice(d, 'style', [['inner', 'Inner Bevel'], ['outer', 'Outer Bevel'], ['emboss', 'Emboss'], ['pillow', 'Pillow Emboss'], ['stroke', 'Stroke Emboss']])),
       row('Technique', ...choice(d, 'technique', [['smooth', 'Smooth'], ['hard', 'Chisel Hard'], ['soft', 'Chisel Soft']])),
       row('Depth %', ...range(d, 'depth', 1, 500)), row('Direction', ...choice(d, 'direction', [['up', 'Up'], ['down', 'Down']])),
-      row('Size', ...range(d, 'size', 0, 100)), row('Soften', ...range(d, 'soften', 0, 16)),
-      row('Angle °', ...range(d, 'angle', 0, 360)), row('Altitude °', ...range(d, 'altitude', 0, 90)),
+      row('Size', ...range(d, 'size', 0, 100)), row('Soften', ...range(d, 'soften', 0, 16)), contour(d, 'contour', 'Contour'),
+      row('Angle °', ...range(d, 'angle', 0, 360)), row('Altitude °', ...range(d, 'altitude', 0, 90)), contour(d, 'glossContour', 'Gloss contour'),
       row('Highlight', ...blend(d, 'hiBlend')), row('', ...color(d, 'hiColor')), row('Opacity %', ...range(d, 'hiOpacity', 0, 1, 0.01, 100)),
       row('Shadow', ...blend(d, 'shBlend')), row('', ...color(d, 'shColor')), row('Opacity %', ...range(d, 'shOpacity', 0, 1, 0.01, 100)),
     ] as never,
