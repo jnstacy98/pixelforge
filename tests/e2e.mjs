@@ -1565,6 +1565,43 @@ await biOpen(); await biSet('gray', 'src', 0, 100); await biSet('gray', 'src', 1
 assert.deepEqual(await view(100, 100), [0, 0, 0]); assert.deepEqual(await view(300, 100), [200, 200, 200]); ok('This Layer slider hides the layer’s own dark tones');
 await page.keyboard.press('Enter'); await wait();
 
+// 6r. Pattern Overlay
+await page.evaluate(() => {
+  window.__blank(400, 300); const d = window.__app.doc, l = d.layers[0];
+  l.ctx.fillStyle = '#808080'; l.ctx.fillRect(100, 100, 200, 100); d.emit('structure');
+});
+await wait();
+await page.click('#lfx'); await page.click('.popup .mi:has-text("Layer Style")'); await page.waitForSelector('.fx-panel');
+await fxSet('patternOverlay', { on: true, id: 'pf:stripes', name: 'Stripes', scale: 1, opacity: 1 });
+const stripe = await Promise.all([0, 1, 2, 3, 4, 5, 6, 7].map((x) => view(100 + x, 150)));
+assert.ok(stripe.some((c) => c[0] > 200) && stripe.some((c) => c[0] < 80), `stripes ${JSON.stringify(stripe)}`); ok('Pattern Overlay tiles the pattern across the layer');
+assert.deepEqual(await view(50, 150), [255, 255, 255]); ok('…and only inside the layer’s shape');
+await fxSet('patternOverlay', { scale: 2 });
+const wide = await Promise.all([0, 1, 2, 3, 4, 5, 6, 7].map((x) => view(100 + x, 150)));
+assert.ok(wide.slice(0, 3).every((c) => c[0] > 200) && wide.slice(5).every((c) => c[0] < 80), JSON.stringify(wide)); ok('Scale stretches the tile (8 px stripes become 16 px, origin at the document corner)');
+await fxSet('patternOverlay', { scale: 1, opacity: 0.5, blend: 'normal' });
+const half2 = await view(105, 150); assert.ok(half2[0] > 150 && half2[0] < 230, `got ${half2}`); ok('Pattern opacity blends it with the layer');
+await fxSet('colorOverlay', { on: true, color: '#0000ff', opacity: 1 });
+assert.deepEqual(await view(150, 150), [0, 0, 255]); ok('Color Overlay sits above Pattern Overlay, as in Photoshop');
+await fxSet('colorOverlay', { on: false });
+await fxOK();
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Layer Style');
+// define a pattern from a selection and use it
+await page.evaluate(() => {
+  const d = window.__app.doc, l = d.layers[0]; l.ctx.fillStyle = '#ff0000'; l.ctx.fillRect(100, 100, 4, 8); l.ctx.fillStyle = '#00ff00'; l.ctx.fillRect(104, 100, 4, 8); d.emit('structure');
+  d.setSelection({ x: 100, y: 100, w: 8, h: 8 });
+});
+await page.click('#lfx'); await page.click('.popup .mi:has-text("Layer Style")'); await page.waitForSelector('.fx-panel');
+await page.click('.fx-panel button:has-text("New pattern from selection")'); await page.waitForTimeout(250);
+const userPat = await page.evaluate(() => window.__app.doc.layers[0].effects.patternOverlay);
+assert.ok(userPat.id.startsWith('pf:user')); ok('Define a pattern from the selection');
+await fxSet('patternOverlay', { opacity: 1, id: userPat.id });
+const pa = await view(101, 150), pb = await view(105, 150);   // tiles are anchored at the document origin, like Photoshop's default
+assert.ok(pa[1] > 200 && pa[0] < 60 && pb[0] > 200 && pb[1] < 60, `${pa} ${pb}`); ok('the new pattern tiles green | red across the layer');
+await fxOK();
+const prt = await page.evaluate((id) => window.__patternRoundtrip(id), userPat.id);
+assert.ok(prt.had && prt.same && prt.fx.id === userPat.id, JSON.stringify(prt)); assert.equal(prt.notes.length, 0); ok('PSD round-trip: the pattern tile travels inside the file with the Pattern Overlay');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

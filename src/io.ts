@@ -1,3 +1,4 @@
+import { getPattern, hasPattern, registerPattern } from './patterns';
 import { fromPsdRanges, isBlendIfActive, toPsdRanges } from './blendif';
 import { readPsd, writePsd, type Layer as PsdLayer, type Psd } from 'ag-psd';
 import { Doc, Layer, makeCanvas, ctxOf } from './doc';
@@ -65,6 +66,10 @@ async function importRaster(data: ArrayBuffer, name: string, ext: string): Promi
 
 function importPsd(data: ArrayBuffer, name: string): Doc {
   const psd = readPsd(data, { skipThumbnail: true, skipLayerImageData: false });
+  for (const p of psd.patterns ?? []) {                          // pattern tiles used by Pattern Overlay
+    const { w, h } = p.bounds;
+    if (p.id && w > 0 && h > 0 && p.data.length === w * h * 4) registerPattern({ id: p.id, name: p.name || 'Pattern', w, h, data: new Uint8ClampedArray(p.data) });
+  }
   const doc = new Doc(psd.width, psd.height, name);
   /** Expand a PSD mask rectangle to a document-sized grayscale mask (filled with the mask's default colour). */
   const importMask = (c: PsdLayer, l: Layer) => {
@@ -97,6 +102,7 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
       if (c.effects) {
         const { fx, unsupported } = fromPsdEffects(c.effects, psd.imageResources?.globalAngle !== undefined ? { angle: psd.imageResources.globalAngle, altitude: psd.imageResources.globalAltitude ?? 30 } : undefined);
         if (Object.keys(fx).length) l.effects = fx;
+        if (fx.patternOverlay && !hasPattern(fx.patternOverlay.id)) doc.notes.push(`"${l.name}": pattern "${fx.patternOverlay.name}" is not stored in the file — its Pattern Overlay is skipped`);
         if (unsupported.length) doc.notes.push(`"${l.name}": ${[...new Set(unsupported)].join(', ')} not supported (skipped)`);
       }
       importMask(c, l);
@@ -131,6 +137,7 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
     const psd: Psd = {
       width: doc.width, height: doc.height,
       canvas: flatten(doc),
+      ...(usedPatterns(doc).length ? { patterns: usedPatterns(doc) } : {}),
       children: doc.tree().map(function toPsd(n): PsdLayer {
         const l = n.layer;
         return {
@@ -186,4 +193,14 @@ export async function saveAs(doc: Doc, fmt: ExportFormat, quality?: number): Pro
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   if (fmt === 'psd') doc.history.dirty = false;
   return true;
+}
+
+/** Pattern tiles referenced by the document's Pattern Overlays, in PSD form. */
+function usedPatterns(doc: Doc) {
+  const ids = new Set<string>();
+  for (const l of doc.layers) if (l.effects?.patternOverlay) ids.add(l.effects.patternOverlay.id);
+  return [...ids].flatMap((id) => {
+    const t = getPattern(id);
+    return t ? [{ name: t.name, id: t.id, x: 0, y: 0, bounds: { x: 0, y: 0, w: t.w, h: t.h }, data: new Uint8Array(t.data) }] : [];
+  });
 }

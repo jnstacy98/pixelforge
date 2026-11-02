@@ -119,6 +119,17 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.equal(P.fromPsdAdjustment({ type: 'color lookup' }), null);
 });
 
+// ---- Pattern Overlay
+import * as PT from '../src/patterns.ts';
+t('pattern registry: built-ins, define, lookup; Pattern Overlay PSD round trip; stacking order matches Photoshop', () => {
+  assert.ok(PT.getPattern('pf:checker') && PT.getPattern('pf:grain').w === 64); assert.equal(PT.getPattern('nope'), undefined);
+  const u = PT.definePattern('Mine', 2, 2, new Uint8ClampedArray(16).fill(7)); assert.equal(PT.getPattern(u.id).name, 'Mine');
+  const fx = { patternOverlay: { on: true, id: 'pf:dots', name: 'Dots', opacity: 0.6, blend: 'multiply', scale: 1.5, angle: 20, phase: { x: 3, y: -4 } } };
+  const back = F.fromPsdEffects(F.toPsdEffects(fx)); assert.deepEqual(back.fx, fx); assert.deepEqual(back.unsupported, []);
+  const o = F.FX_ORDER; assert.ok(o.indexOf('patternOverlay') < o.indexOf('gradientOverlay') && o.indexOf('gradientOverlay') < o.indexOf('colorOverlay') && o.indexOf('colorOverlay') < o.indexOf('satin'));
+  assert.ok(F.hasEffects(fx)); assert.equal(F.defaultFx('patternOverlay').id, 'pf:checker');
+});
+
 // ---- Blend If
 import * as BI from '../src/blendif.ts';
 t('Blend If range table: hidden outside, ramps over the splits, 1 between', () => {

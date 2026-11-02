@@ -351,6 +351,15 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const fx = (d: Doc) => Object.fromEntries(d.layers.map((l) => [l.name, { effects: l.effects, fill: Math.round(l.fillOpacity * 100) / 100 }]));
   return { before: sample(app.doc), after: sample(d2), fxBefore: fx(app.doc), fxAfter: fx(d2), notes: d2.notes };
 };
+(window as any).__patternRoundtrip = async (id: string) => {
+  const { encode, importFile } = await import('./io');
+  const { getPattern, unregisterPattern, hasPattern } = await import('./patterns');
+  const t0 = getPattern(id)!, data = await encode(app.doc, 'psd');
+  unregisterPattern(id);                                            // the file alone must carry the tile
+  const d2 = await importFile({ name: 'pat.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
+  const t1 = getPattern(id);
+  return { had: hasPattern(id), w: t1?.w, h: t1?.h, same: !!t1 && t1.w === t0.w && t1.h === t0.h && t1.data.every((v, i) => v === t0.data[i]), notes: d2.notes, fx: d2.layers.map((l) => l.effects?.patternOverlay).find(Boolean) };
+};
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;
 

@@ -1,3 +1,4 @@
+import { tileCanvas } from './patterns';
 import { blendOp, ctxOf, makeCanvas, type Rect } from './doc';
 import { bevelHeight, bevelShade, fxMargin, gradientEnds, growCoverage, hexToRgb, ringCoverage, shadowOffset, softEdge, type GradientFx, type LayerEffects } from './fx';
 
@@ -84,14 +85,24 @@ export function renderStyled(shape: HTMLCanvasElement, fx: LayerEffects, fill: n
   const og = fx.outerGlow;
   if (og?.on) under.push({ canvas: knock(soft(A, w, h, og.color, og.size, og.spread, 'glow'), 0, 0), x: R.x, y: R.y, opacity: og.opacity, blend: og.blend });
   ox.globalAlpha = fill; ox.drawImage(S, 0, 0); ox.globalAlpha = 1;                       // the layer's own pixels
-  const co = fx.colorOverlay;
-  if (co?.on) put(colored(A, w, h, co.color), co.opacity, co.blend);
+  const po = fx.patternOverlay;
+  if (po?.on) {
+    const tile = tileCanvas(po.id);
+    if (tile) {
+      const g = makeCanvas(w, h), gx = ctxOf(g), pat = gx.createPattern(tile, 'repeat')!;
+      pat.setTransform(new DOMMatrix().translate(po.phase.x - R.x, po.phase.y - R.y).rotate(po.angle).scale(Math.max(0.01, po.scale)));
+      gx.fillStyle = pat; gx.fillRect(0, 0, w, h);
+      put(clip(g, 'destination-in'), po.opacity, po.blend);
+    }
+  }
   const go = fx.gradientOverlay;
   if (go?.on) {
     const g = makeCanvas(w, h), gx = ctxOf(g), box = { x: b.x - R.x, y: b.y - R.y, w: b.w, h: b.h };
     gx.fillStyle = gradientFor(gx, go, box); gx.fillRect(0, 0, w, h);
     put(clip(g, 'destination-in'), go.opacity, go.blend);
   }
+  const co = fx.colorOverlay;
+  if (co?.on) put(colored(A, w, h, co.color), co.opacity, co.blend);
   // Satin: two blurred, offset copies of the shape subtracted from one another gives the soft, silky interior shading
   const sa = fx.satin;
   if (sa?.on) {

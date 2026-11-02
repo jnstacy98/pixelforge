@@ -12,6 +12,7 @@ export interface GradientFx {
   on: boolean; color1: string; color2: string; opacity: number; blend: string; angle: number; reverse: boolean;
   style?: 'linear' | 'radial' | 'angle' | 'reflected' | 'diamond'; scale?: number; stops?: GradientStop[];
 }
+export interface PatternFx { on: boolean; id: string; name: string; opacity: number; blend: string; scale: number; angle: number; phase: { x: number; y: number } }
 export interface SatinFx { on: boolean; color: string; opacity: number; blend: string; angle: number; distance: number; size: number; invert: boolean }
 export interface BevelFx {
   on: boolean;
@@ -26,15 +27,15 @@ export interface BevelFx {
 export interface LayerEffects {
   bevel?: BevelFx;
   dropShadow?: ShadowFx; innerShadow?: ShadowFx; outerGlow?: GlowFx; innerGlow?: GlowFx;
-  colorOverlay?: OverlayFx; gradientOverlay?: GradientFx; satin?: SatinFx; stroke?: StrokeFx;
+  colorOverlay?: OverlayFx; gradientOverlay?: GradientFx; patternOverlay?: PatternFx; satin?: SatinFx; stroke?: StrokeFx;
 }
 export type FxKind = keyof LayerEffects;
 /** Stacking order, bottom → top, exactly as Photoshop composites them. */
-export const FX_ORDER: FxKind[] = ['dropShadow', 'outerGlow', 'colorOverlay', 'gradientOverlay', 'satin', 'innerGlow', 'innerShadow', 'bevel', 'stroke'];
+export const FX_ORDER: FxKind[] = ['dropShadow', 'outerGlow', 'patternOverlay', 'gradientOverlay', 'colorOverlay', 'satin', 'innerGlow', 'innerShadow', 'bevel', 'stroke'];
 /** Order shown in the Layer Style dialog (Photoshop lists them top-most first). */
 export const FX_LABELS: Record<FxKind, string> = {
   stroke: 'Stroke', bevel: 'Bevel & Emboss', innerShadow: 'Inner Shadow', innerGlow: 'Inner Glow', colorOverlay: 'Color Overlay',
-  gradientOverlay: 'Gradient Overlay', satin: 'Satin', outerGlow: 'Outer Glow', dropShadow: 'Drop Shadow',
+  gradientOverlay: 'Gradient Overlay', patternOverlay: 'Pattern Overlay', satin: 'Satin', outerGlow: 'Outer Glow', dropShadow: 'Drop Shadow',
 };
 
 export function defaultFx<K extends FxKind>(kind: K): NonNullable<LayerEffects[K]> {
@@ -45,6 +46,7 @@ export function defaultFx<K extends FxKind>(kind: K): NonNullable<LayerEffects[K
     innerGlow: { on: true, color: '#ffffbe', opacity: 0.75, blend: 'screen', spread: 0, size: 5 },
     colorOverlay: { on: true, color: '#ff0000', opacity: 1, blend: 'normal' },
     gradientOverlay: { on: true, color1: '#000000', color2: '#ffffff', opacity: 1, blend: 'normal', angle: 90, reverse: false },
+    patternOverlay: { on: true, id: 'pf:checker', name: 'Checkerboard', opacity: 1, blend: 'normal', scale: 1, angle: 0, phase: { x: 0, y: 0 } },
     satin: { on: true, color: '#000000', opacity: 0.5, blend: 'multiply', angle: 19, distance: 11, size: 14, invert: true },
     stroke: { on: true, color: '#ff0000', opacity: 1, blend: 'normal', size: 3, position: 'outside' },
     bevel: { on: true, style: 'inner', technique: 'smooth', depth: 100, direction: 'up', size: 5, soften: 0, angle: 120, altitude: 30, hiColor: '#ffffff', hiBlend: 'screen', hiOpacity: 0.75, shColor: '#000000', shBlend: 'multiply', shOpacity: 0.75 },
@@ -265,6 +267,10 @@ export function toPsdEffects(e: LayerEffects): LayerEffectsInfo {
       gradient: { name: 'Custom', type: 'solid', smoothness: 1, colorStops: stops.map((s) => ({ color: toColor(s.color), location: s.at, midpoint: 0.5 })), opacityStops: stops.map((s) => ({ opacity: s.alpha, location: s.at, midpoint: 0.5 })) },
     }];
   }
+  if (e.patternOverlay) {
+    const p = e.patternOverlay;
+    out.patternOverlay = { present: true, showInDialog: true, enabled: p.on, blendMode: p.blend as never, opacity: p.opacity, scale: p.scale, angle: p.angle, pattern: { name: p.name, id: p.id }, phase: { ...p.phase } };
+  }
   if (e.satin) {
     const s = e.satin;
     out.satin = { present: true, showInDialog: true, enabled: s.on, size: px(s.size), blendMode: s.blend as never, color: toColor(s.color), antialiased: true, opacity: s.opacity, distance: px(s.distance), angle: s.angle, invert: s.invert };
@@ -272,7 +278,7 @@ export function toPsdEffects(e: LayerEffects): LayerEffectsInfo {
   return out;
 }
 
-/** Convert PSD effects. `unsupported` lists effect types that were dropped (bevel, satin, pattern overlay, non-linear gradients...). */
+/** Convert PSD effects. `unsupported` lists effect types that were dropped (noise gradients, textures...). */
 export function fromPsdEffects(e: LayerEffectsInfo, globalLight?: { angle: number; altitude: number }): { fx: LayerEffects; unsupported: string[] } {
   const fx: LayerEffects = {}, unsupported: string[] = [];
   /** An effect flagged "use global light" follows the document's light angle, not the angle stored with the effect. */
@@ -329,6 +335,10 @@ export function fromPsdEffects(e: LayerEffectsInfo, globalLight?: { angle: numbe
     if (v.useTexture) unsupported.push('bevel texture');
     if (v.contour && v.contour.name && !/linear/i.test(v.contour.name)) unsupported.push('bevel gloss contour');
   }
-  if (e.patternOverlay?.enabled !== false && e.patternOverlay) unsupported.push('pattern overlay');
+  const po = e.patternOverlay;
+  if (po) {
+    const d = defaultFx('patternOverlay');
+    fx.patternOverlay = { on: !dis && po.enabled !== false, id: po.pattern?.id ?? d.id, name: po.pattern?.name ?? d.name, opacity: po.opacity ?? 1, blend: blendIn(po.blendMode, 'normal'), scale: po.scale ?? 1, angle: po.angle ?? 0, phase: po.phase ? { x: po.phase.x ?? 0, y: po.phase.y ?? 0 } : { x: 0, y: 0 } };
+  }
   return { fx, unsupported };
 }

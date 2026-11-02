@@ -1,5 +1,6 @@
 import { app } from './state';
 import { BLEND_MODES, type Layer } from './doc';
+import { allPatterns, definePattern, hasPattern, getPattern } from './patterns';
 import { FX_LABELS, FX_ORDER, cloneFx, defaultFx, sameFx, type FxKind, type LayerEffects } from './fx';
 
 let busy = false;
@@ -84,6 +85,33 @@ export function openLayerStyle(layer: Layer = app.doc.active, focus?: FxKind) {
       return [...common(d), ...(custom ? [row('Gradient', el('span', { textContent: `Custom, ${(d.stops as unknown[]).length} stops`, class: 'lbl' } as never))] : []),
         row('From', ...col('color1')), row('To', ...col('color2')), row('Style', ...choice(d, 'style', [['linear', 'Linear'], ['radial', 'Radial'], ['angle', 'Angle'], ['reflected', 'Reflected'], ['diamond', 'Diamond (as radial)']])),
         row('Angle °', ...range(d, 'angle', 0, 360)), row('Scale %', ...range(d, 'scale', 0.1, 3, 0.01, 100)), row('Reverse', rev)] as never;
+    },
+    patternOverlay: (d: Record<string, unknown>) => {
+      const sel = el('select');
+      const fill = () => {
+        sel.innerHTML = allPatterns().map((t) => `<option value="${t.id}">${t.name.replace(/[<&"]/g, '')}</option>`).join('');
+        if (!hasPattern(d.id as string)) sel.append(el('option', { value: d.id as string, textContent: `${d.name} (missing)` }));
+        sel.value = d.id as string;
+      };
+      fill();
+      sel.onchange = () => { d.id = sel.value; d.name = getPattern(sel.value)?.name ?? sel.value; changed(); };
+      const mk = el('button', { type: 'button', textContent: 'New pattern from selection / layer' });
+      mk.onclick = () => {
+        const L = layer.canvas, sr = doc.selection;
+        let r = sr ? { x: Math.floor(sr.x), y: Math.floor(sr.y), w: Math.ceil(sr.w), h: Math.ceil(sr.h) } : { x: 0, y: 0, w: L.width, h: L.height };
+        if (!sr) {                                                             // tight box around the layer's pixels
+          const dd = L.getContext('2d', { willReadFrequently: true })!.getImageData(0, 0, L.width, L.height).data;
+          let x0 = L.width, y0 = L.height, x1 = -1, y1 = -1;
+          for (let y = 0; y < L.height; y++) for (let x = 0; x < L.width; x++) if (dd[(y * L.width + x) * 4 + 3]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+          if (x1 < 0) return app.toast('The layer is empty');
+          r = { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+        }
+        if (r.w < 2 || r.h < 2 || r.w * r.h > 1024 * 1024) return app.toast('Pick an area between 2×2 and 1024×1024 pixels');
+        const img = L.getContext('2d', { willReadFrequently: true })!.getImageData(r.x, r.y, r.w, r.h);
+        const t = definePattern(`Pattern ${allPatterns().filter((p) => p.id.startsWith('pf:user')).length + 1}`, r.w, r.h, img.data);
+        d.id = t.id; d.name = t.name; fill(); changed();
+      };
+      return [row('Pattern', sel), row('', mk), ...common(d), row('Scale %', ...range(d, 'scale', 0.1, 8, 0.01, 100)), row('Angle °', ...range(d, 'angle', -180, 180))] as never;
     },
     satin: (d: Record<string, unknown>) => {
       const inv = el('input', { type: 'checkbox', checked: !!d.invert }); inv.onchange = () => { d.invert = inv.checked; changed(); };
