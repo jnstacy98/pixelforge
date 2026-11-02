@@ -10,7 +10,7 @@ import { floodSelect } from './flood';
 import { chooseSpotOffset, healPatch } from './heal';
 import { sampleSnapshot } from './sampling';
 import { ContentMoveTool, PatchTool } from './patchtool';
-import { Layer, cloneCanvas, clampRect, ctxOf, makeCanvas, pushPixelEdit, type Rect } from './doc';
+import { Layer, cloneCanvas, clampRect, ctxOf, makeCanvas, pushPixelEdit, hooks, type Rect } from './doc';
 import { flatten } from './render';
 
 export interface Pt { x: number; y: number; pressure: number; tiltX?: number; tiltY?: number }
@@ -395,8 +395,8 @@ class MoveTool implements Tool {
     this.layers = l.isGroup ? [...doc.layers.filter((e) => doc.isDescendant(e, l)), l] : [l];
     this.items = [];
     if (this.selMode) {
-      const c = l.maskMode ? l.mask! : l.canvas;
-      this.items = [{ layer: l, get: () => (l.maskMode ? l.mask! : l.canvas), snap: cloneCanvas(c) }];
+      const c = l.target;
+      this.items = [{ layer: l, get: () => l.target, snap: cloneCanvas(c) }];
     } else {
       for (const e of this.layers) {
         if (!e.isGroup) this.items.push({ layer: e, get: () => e.canvas, snap: cloneCanvas(e.canvas) });
@@ -435,7 +435,7 @@ class MoveTool implements Tool {
     }
     for (const t of this.texts) { t.layer.text!.x = t.x + dx; t.layer.text!.y = t.y + dy; }
     for (const sh of this.shapes) { sh.layer.shape!.T[4] = sh.e + dx; sh.layer.shape!.T[5] = sh.f + dy; }
-    for (const l of this.layers) l.touchMask();
+    for (const l of this.layers) { l.touchMask(); if (l.fmaskEdit) hooks.fmaskChanged(l); }
     doc.emit('pixels');
   }
   up() {
@@ -454,7 +454,7 @@ class MoveTool implements Tool {
       texts.forEach((t, i) => { t.layer.text!.x = txt[i].x; t.layer.text!.y = txt[i].y; });
       shapes.forEach((q, i) => { q.layer.shape!.T[4] = shp[i].e; q.layer.shape!.T[5] = shp[i].f; });
       if (rs) rs.shape = undo ? rsShape : null;
-      for (const l of layers) l.touchMask();
+      for (const l of layers) { l.touchMask(); if (l.fmaskEdit) hooks.fmaskChanged(l); }
       doc.emit('structure');
     };
     const rs = this.rasterShape, rsShape = rs ? rs.shape : null;

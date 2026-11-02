@@ -353,11 +353,17 @@ export function renderLayers() {
         const wrap = document.createElement('div'); wrap.className = 'smartwrap';
         const badge = document.createElement('span'); badge.className = 'smartbadge'; badge.textContent = '⧉'; badge.title = l.smart.filters?.length ? `Smart Object — filters: ${l.smart.filters.map((f) => f.kind).join(', ')}` : 'Smart Object';
         wrap.append(pix, badge); parts.push(wrap);
+        if (l.smart.filterMask) {
+          const fm = thumb(l.smart.filterMask); fm.classList.add('mthumb'); fm.classList.toggle('target', l === doc.active && l.fmaskEdit);
+          fm.title = 'Smart filter mask — click to paint on it (white = filtered, black = unfiltered)';
+          fm.onclick = (e) => { e.stopPropagation(); doc.setEditFilterMask(l, true); };
+          parts.push(fm);
+        }
       } else parts.push(pix);
     }
     if (l.mask) {
       const m = thumb(l.mask); m.classList.add('mthumb');
-      m.classList.toggle('target', l === doc.active && l.maskMode && !l.adjustment); m.classList.toggle('off', !l.maskEnabled);
+      m.classList.toggle('target', l === doc.active && l.maskMode && !l.adjustment && !l.fmaskEdit); m.classList.toggle('off', !l.maskEnabled);
       m.title = 'Layer mask — click to edit, Shift+click to enable/disable';
       m.onclick = (e) => { e.stopPropagation(); if (e.shiftKey) { doc.select(l); doc.toggleMask(l); } else doc.setEditMask(l, true); };
       parts.push(m);

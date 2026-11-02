@@ -129,9 +129,12 @@ export class Layer {
     g.kind = 'group'; g.blend = 'pass through';
     return g;
   }
-  get maskMode() { return !!this.mask && (this.editMask || !!this.adjustment); }
+  /** True while the smart object's filter mask (not the pixels or the layer mask) receives edits. */
+  fmaskEdit = false;
+  get fmask(): HTMLCanvasElement | null { return this.smart?.filterMask ?? null; }
+  get maskMode() { return (this.fmaskEdit && !!this.fmask) || (!!this.mask && (this.editMask || !!this.adjustment)); }
   /** The canvas that editing tools should draw on. */
-  get target() { return this.maskMode ? this.mask! : this.canvas; }
+  get target() { return this.fmaskEdit && this.fmask ? this.fmask : this.maskMode ? this.mask! : this.canvas; }
   get tctx() { return ctxOf(this.target); }
   touchMask() { this.maskVer++; this.rev++; }
   maskAlpha(): HTMLCanvasElement {
@@ -175,11 +178,11 @@ export interface Stroke { layer: Layer; canvas: HTMLCanvasElement; opacity: numb
 interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; shape: ShapeData | null; adjustment: AdjustmentData | null; effects: LayerEffects | null; fillOpacity: number; blendIf: BlendIf | null; smart: SmartInfo | null }
 const captureLayer = (l: Layer): LayerState => ({
   canvas: cloneCanvas(l.canvas), mask: l.mask && cloneCanvas(l.mask), maskEnabled: l.maskEnabled, editMask: l.editMask, text: l.text && { ...l.text }, shape: cloneShape(l.shape),
-  adjustment: l.adjustment && cloneAdjustment(l.adjustment), effects: cloneFx(l.effects), fillOpacity: l.fillOpacity, blendIf: cloneBlendIf(l.blendIf), smart: cloneSmart(l.smart),
+  adjustment: l.adjustment && cloneAdjustment(l.adjustment), effects: cloneFx(l.effects), fillOpacity: l.fillOpacity, blendIf: cloneBlendIf(l.blendIf), smart: cloneSmart(l.smart, cloneCanvas),
 });
 const restoreLayer = (l: Layer, s: LayerState) => {
   l.canvas = cloneCanvas(s.canvas); l.mask = s.mask && cloneCanvas(s.mask);
-  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.shape = cloneShape(s.shape); l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.effects = cloneFx(s.effects); l.fillOpacity = s.fillOpacity; l.blendIf = cloneBlendIf(s.blendIf); l.smart = cloneSmart(s.smart); l.touchMask();
+  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.shape = cloneShape(s.shape); l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.effects = cloneFx(s.effects); l.fillOpacity = s.fillOpacity; l.blendIf = cloneBlendIf(s.blendIf); l.smart = cloneSmart(s.smart, cloneCanvas); l.touchMask();
 };
 
 interface Snapshot { w: number; h: number; items: { layer: Layer; state: LayerState }[] }
@@ -231,8 +234,17 @@ export class Doc {
   select(layer: Layer) { this.active = layer; this.emit('structure'); }
   /** Choose whether the pixels or the layer mask receive edits. */
   setEditMask(layer: Layer, on: boolean) {
+    layer.fmaskEdit = false;
     layer.editMask = (on || !!layer.adjustment) && !!layer.mask;
     if (layer.editMask) layer.maskEnabled = true;
+    this.active = layer;
+    this.emit('structure');
+  }
+
+  /** Choose whether edits go to the smart object's filter mask. */
+  setEditFilterMask(layer: Layer, on: boolean) {
+    layer.fmaskEdit = on && !!layer.fmask;
+    if (layer.fmaskEdit) layer.editMask = false;
     this.active = layer;
     this.emit('structure');
   }
@@ -257,7 +269,7 @@ export class Doc {
     if (src.isGroup) return this.duplicateGroup(src);
     const at = this.layers.indexOf(src) + 1;
     const l = this.addLayer(`${src.name} copy`, cloneCanvas(src.canvas), at);
-    l.parent = src.parent; l.clipped = src.clipped; l.effects = cloneFx(src.effects); l.fillOpacity = src.fillOpacity; l.blendIf = cloneBlendIf(src.blendIf); l.smart = cloneSmart(src.smart);
+    l.parent = src.parent; l.clipped = src.clipped; l.effects = cloneFx(src.effects); l.fillOpacity = src.fillOpacity; l.blendIf = cloneBlendIf(src.blendIf); l.smart = cloneSmart(src.smart, cloneCanvas);
     l.opacity = src.opacity; l.blend = src.blend; l.visible = src.visible;
     if (src.mask) { l.mask = cloneCanvas(src.mask); l.maskEnabled = src.maskEnabled; }
     if (src.text) l.text = { ...src.text };
@@ -377,7 +389,7 @@ export class Doc {
     const block = this.blockOf(g), map = new Map<Layer, Layer>();
     for (const e of block) {
       const c = e.isGroup ? Layer.group(e.name) : new Layer(e.name, cloneCanvas(e.canvas));
-      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped; c.effects = cloneFx(e.effects); c.fillOpacity = e.fillOpacity; c.blendIf = cloneBlendIf(e.blendIf); c.smart = cloneSmart(e.smart);
+      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped; c.effects = cloneFx(e.effects); c.fillOpacity = e.fillOpacity; c.blendIf = cloneBlendIf(e.blendIf); c.smart = cloneSmart(e.smart, cloneCanvas);
       if (e.mask) { c.mask = cloneCanvas(e.mask); c.maskEnabled = e.maskEnabled; }
       if (e.text) c.text = { ...e.text };
       if (e.shape) c.shape = cloneShape(e.shape);
@@ -784,9 +796,12 @@ export const clampRect = (r: Rect, w: number, h: number): Rect | null => {
  * Record a pixel edit of `rect` on the layer's current edit target (pixels or mask).
  * `before` is a copy of that target taken before the edit. Editing a text layer's pixels rasterizes it.
  */
+/** Late-bound callbacks (set by the smart-object module). */
+export const hooks = { fmaskChanged: (_l: Layer) => {} };
 export function pushPixelEdit(doc: Doc, layer: Layer, before: HTMLCanvasElement, rect: Rect | null, label: string) {
   const isMask = layer.maskMode;
-  const get = () => (isMask ? layer.mask! : layer.canvas);
+  const fm = isMask && layer.fmaskEdit && !!layer.fmask, get = () => (fm ? layer.fmask! : isMask ? layer.mask! : layer.canvas);
+  const changed = () => { if (fm) hooks.fmaskChanged(layer); };
   const r = rect && clampRect(rect, get().width, get().height);
   if (!r) return;
   const b = ctxOf(before).getImageData(r.x, r.y, r.w, r.h);
@@ -794,11 +809,11 @@ export function pushPixelEdit(doc: Doc, layer: Layer, before: HTMLCanvasElement,
   const rasterized = !isMask ? layer.text : null, rasterShape = !isMask ? layer.shape : null;
   if (rasterized) layer.text = null;
   if (rasterShape) layer.shape = null;
-  layer.touchMask();
+  layer.touchMask(); changed();
   doc.history.push({
     label,
-    undo: () => { ctxOf(get()).putImageData(b, r.x, r.y); if (rasterized) layer.text = rasterized; if (rasterShape) layer.shape = rasterShape; layer.touchMask(); doc.emit('structure'); },
-    redo: () => { ctxOf(get()).putImageData(a, r.x, r.y); if (rasterized) layer.text = null; if (rasterShape) layer.shape = null; layer.touchMask(); doc.emit('structure'); },
+    undo: () => { ctxOf(get()).putImageData(b, r.x, r.y); if (rasterized) layer.text = rasterized; if (rasterShape) layer.shape = rasterShape; layer.touchMask(); changed(); doc.emit('structure'); },
+    redo: () => { ctxOf(get()).putImageData(a, r.x, r.y); if (rasterized) layer.text = null; if (rasterShape) layer.shape = null; layer.touchMask(); changed(); doc.emit('structure'); },
   });
   doc.emit('structure');
 }

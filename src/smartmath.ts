@@ -12,6 +12,8 @@ export interface SmartInfo {
   filters?: SmartFilter[];
   /** Photoshop filters PixelForge can't run: kept so that saving doesn't lose them. */
   rawFilters?: Filter[];
+  /** Filter mask (document-sized gray canvas; white = filters apply, black = unfiltered). */
+  filterMask?: HTMLCanvasElement;
 }
 export type Quad = [number, number, number, number, number, number, number, number];
 
@@ -57,4 +59,4 @@ export function newLinkId(): string {
   return `${h(8)}-${h(4)}-4${h(3)}-a${h(3)}-${h(12)}`;
 }
 
-export const cloneSmart = (s: SmartInfo | null): SmartInfo | null => (s ? { print: s.print, placed: JSON.parse(JSON.stringify(s.placed)), ...(s.filters ? { filters: cloneFilters(s.filters) } : {}), ...(s.rawFilters ? { rawFilters: s.rawFilters } : {}) } : null);
+export const cloneSmart = (s: SmartInfo | null, cloneCanvas?: (c: HTMLCanvasElement) => HTMLCanvasElement): SmartInfo | null => (s ? { print: s.print, placed: JSON.parse(JSON.stringify(s.placed)), ...(s.filters ? { filters: cloneFilters(s.filters) } : {}), ...(s.rawFilters ? { rawFilters: s.rawFilters } : {}), ...(s.filterMask ? { filterMask: cloneCanvas ? cloneCanvas(s.filterMask) : s.filterMask } : {}) } : null);

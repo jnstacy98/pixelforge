@@ -2131,6 +2131,42 @@ assert.notDeepEqual(bPlain, bShape); assert.notDeepEqual(bPlain, bGloss); ok('a 
 const rtC = await page.evaluate(() => window.__fxRoundtrip([[150, 150], [101, 150]]));
 assert.deepEqual(rtC.fxAfter.Box.effects.bevel.glossContour, { name: 'Ring' }); ok('contours survive a PSD round trip (the gloss contour comes back as the Ring preset)');
 
+// 6ag. smart filter masks
+await ftScene();
+await page.evaluate(() => { window.__smartApi.convertToSmart(window.__app.doc, window.__app.doc.active); });
+await page.waitForFunction(() => window.__app.doc.layers[0].smart); await wait();
+await sfAdd({ kind: 'invert', on: true, p: {} }); await wait();
+assert.deepEqual((await a0px(110, 130)).slice(0, 3), [47, 223, 223]);
+await page.evaluate(() => window.__smartApi.addFilterMask(window.__app.doc, window.__app.doc.active)); await wait();
+assert.ok(await page.evaluate(() => !!window.__app.doc.layers[0].smart.filterMask && window.__app.doc.layers[0].fmaskEdit)); assert.deepEqual((await a0px(110, 130)).slice(0, 3), [47, 223, 223]); ok('Add Filter Mask creates a white mask (everything still filtered) and selects it for painting');
+assert.ok(await page.locator('#layerlist .layer.active .mthumb.target').count() >= 1); ok('the Layers panel shows the filter-mask thumbnail as the editing target');
+await page.evaluate(() => { const a = window.__app; a.fg = '#000000'; Object.assign(a.brush, { size: 30, hardness: 1, opacity: 1, flow: 1, spacing: 0.1, tip: 'round', angle: 0, follow: false, tilt: true }); a.setTool('brush'); });
+{ const a = await toScreen(110, 130), b = await toScreen(130, 130); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 6 });
+  await page.waitForTimeout(250);
+  const live = await view(112, 130); assert.ok(live[0] > 150 && live[2] < 100, `live preview ${live}`);
+  await page.mouse.up(); await wait(); }
+ok('painting black on the filter mask shows the unfiltered red live while the stroke is still going');
+assert.deepEqual((await a0px(112, 130)).slice(0, 3), [208, 32, 32]); assert.deepEqual((await a0px(170, 130)).slice(0, 3), [47, 223, 223]); ok('…and when the stroke ends only the painted area is unfiltered; the rest keeps the filter');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Brush Stroke');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual((await a0px(112, 130)).slice(0, 3), [47, 223, 223]); ok('undoing the stroke brings the filter back everywhere');
+await page.keyboard.press('Control+Shift+z'); await wait();
+assert.deepEqual((await a0px(112, 130)).slice(0, 3), [208, 32, 32]);
+// the mask stays when filters change
+await sfAdd({ kind: 'gaussian', on: true, p: { radius: 0.2 } }); await wait();
+assert.deepEqual((await a0px(112, 130)).slice(0, 3), [208, 32, 32]); assert.deepEqual((await a0px(170, 130)).slice(0, 3), [47, 223, 223]); ok('changing the filter stack keeps the mask (re-rendered through it)');
+await sfUpd(0, { on: false }); await wait();
+assert.deepEqual((await a0px(170, 130)).slice(0, 3), [208, 32, 32]); await sfUpd(0, { on: true }); await wait();
+assert.deepEqual((await a0px(170, 130)).slice(0, 3), [47, 223, 223]); ok('switching a filter off and on respects the mask');
+// painting on the pixels again rasterizes only when the pixel thumbnail is the target
+await page.evaluate(() => window.__app.doc.setEditMask(window.__app.doc.active, false));
+assert.equal(await page.evaluate(() => window.__app.doc.active.fmaskEdit), false); ok('selecting the pixels thumbnail switches editing back to the layer');
+const rtM = await page.evaluate(() => window.__adjRoundtrip()); assert.ok(rtM.layers.find((l) => l.smart)); ok('a smart object with a filter mask still saves to PSD (its pixels carry the masked result)');
+await page.evaluate(() => window.__smartApi.deleteFilterMask(window.__app.doc, window.__app.doc.active)); await page.waitForTimeout(500);
+assert.ok(await page.evaluate(() => !window.__app.doc.layers[0].smart.filterMask)); assert.deepEqual((await a0px(112, 130)).slice(0, 3), [47, 223, 223]); ok('Delete Filter Mask re-applies the filters everywhere');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual((await a0px(112, 130)).slice(0, 3), [208, 32, 32]); ok('…and undoes');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

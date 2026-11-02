@@ -336,6 +336,7 @@ t('smart object geometry: affine, scale/rotate about the centre, resize source, 
   assert.equal(SM.fingerprint(a, 4, 4), SM.fingerprint(a.slice(), 4, 4)); assert.notEqual(SM.fingerprint(a, 4, 4), SM.fingerprint(b, 4, 4)); assert.notEqual(SM.fingerprint(a, 4, 4), SM.fingerprint(a, 2, 8));
   assert.match(SM.newLinkId(), /^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/);
   const s = { print: 'x', placed: { id: 'i', transform: [1, 2, 3, 4, 5, 6, 7, 8], type: 'raster' } }, c = SM.cloneSmart(s); c.placed.transform[0] = 99; assert.equal(s.placed.transform[0], 1);
+  const mk = { ...s, filterMask: { tag: 'mask' }, filters: [{ kind: 'invert', on: true, p: {} }] }, mc = SM.cloneSmart(mk, (m) => ({ ...m, copy: true })); assert.deepEqual(mc.filterMask, { tag: 'mask', copy: true }); mc.filters[0].on = false; assert.equal(mk.filters[0].on, true);   // the filter mask is copied with the injected cloner, filters deeply
 });
 
 // ---- pen tilt

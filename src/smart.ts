@@ -1,7 +1,8 @@
 // Smart objects: keep Photoshop's embedded source files, let you edit their contents, re-render them through the placed
 // transform, scale / rotate them without losing quality, convert a layer into one, or rasterize it.
 import { app } from './state';
-import { ctxOf, makeCanvas, type Doc, type Layer } from './doc';
+import { ctxOf, hooks, makeCanvas, type Doc, type Layer } from './doc';
+import { blendFiltered, recomposite, setCache } from './filtercache';
 import { affineFromQuad, fingerprint, newLinkId, quadAt, quadInfo, resizeSource, scaleQuad, type LinkedFile, type Quad, type SmartInfo } from './smartmath';
 import { flatten } from './render';
 import { importFile, encode } from './io';
@@ -27,19 +28,25 @@ const printOf = (l: Layer) => fingerprint(l.ctx.getImageData(0, 0, l.canvas.widt
 
 /** Redraw the layer's pixels from its source through its placed transform. */
 export function draw(l: Layer, src: HTMLCanvasElement) {
-  const p = l.smart!.placed, w = p.width || src.width, h = p.height || src.height;
-  const c = l.ctx;
-  c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, l.canvas.width, l.canvas.height);
+  const p = l.smart!.placed, w = p.width || src.width, h = p.height || src.height, W = l.canvas.width, H = l.canvas.height;
+  const U = makeCanvas(W, H), c = ctxOf(U);                                   // the placed, unfiltered render
   c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high';
   const [a, b, cc, d, e, f] = affineFromQuad(p.transform as Quad, w, h);
   c.setTransform(a, b, cc, d, e, f);
   c.drawImage(src, 0, 0, src.width, src.height, 0, 0, w, h);
-  c.restore();
-  const fs = l.smart!.filters?.filter((f) => f.on);
-  if (fs?.length) { const img = c.getImageData(0, 0, l.canvas.width, l.canvas.height); applySmartFilters(fs, img.data, img.width, img.height); c.putImageData(img, 0, 0); }
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  const fs = l.smart!.filters?.filter((q) => q.on);
+  let F = U;
+  if (fs?.length) { F = makeCanvas(W, H); const fx = ctxOf(F); fx.drawImage(U, 0, 0); const img = fx.getImageData(0, 0, W, H); applySmartFilters(fs, img.data, img.width, img.height); fx.putImageData(img, 0, 0); }
+  setCache(l, U, F);
+  const lc = l.ctx, fm = l.smart!.filterMask;
+  if (fm && F !== U) blendFiltered(lc, U, F, fm);
+  else { lc.save(); lc.setTransform(1, 0, 0, 1, 0, 0); lc.globalCompositeOperation = 'source-over'; lc.clearRect(0, 0, W, H); lc.drawImage(F, 0, 0); lc.restore(); }
   l.smart!.print = printOf(l);
   l.touchMask();
 }
+/** Re-blend after the filter mask was painted on (cheap: uses the cached unfiltered / filtered renders). */
+hooks.fmaskChanged = (l) => { if (l.smart && recomposite(l)) l.smart.print = printOf(l); };
 
 export function isSmart(l: Layer) { return !!l.smart; }
 
@@ -155,13 +162,18 @@ export async function openSmartFilters(doc: Doc, l: Layer) {
   const list = document.createElement('div'); list.className = 'adjust-body';
   const foot = document.createElement('div'); foot.className = 'adjust-foot';
   const add = document.createElement('select'); add.innerHTML = '<option value="">Add filter…</option>' + FILTER_KINDS.map((k) => `<option value="${k}">${FILTER_INFO[k].label}</option>`).join('');
+  const maskBtn = document.createElement('button'); maskBtn.type = 'button';
   const close = document.createElement('button'); close.type = 'button'; close.textContent = 'Close'; close.className = 'primary';
   const grow = document.createElement('span'); grow.className = 'grow';
-  foot.append(add, grow, close); panel.append(head, list, foot); back.append(panel); document.body.append(back);
+  foot.append(add, maskBtn, grow, close); panel.append(head, list, foot); back.append(panel); document.body.append(back);
   const done = () => { back.remove(); };
   close.onclick = done; panel.onkeydown = (e) => { e.stopPropagation(); if (e.key === 'Escape') done(); };
   const btn = (txt: string, title: string, fn: () => void, disabled = false) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = txt; b.title = title; b.disabled = disabled; b.onclick = fn; b.style.padding = '0 6px'; return b; };
+  const syncMaskBtn = () => { maskBtn.textContent = l.smart?.filterMask ? 'Delete filter mask' : 'Add filter mask'; };
+  maskBtn.title = 'A filter mask limits where the filters apply: paint black on it to keep parts of the object unfiltered';
+  maskBtn.onclick = () => { if (l.smart?.filterMask) deleteFilterMask(doc, l); else { addFilterMask(doc, l); done(); } setTimeout(syncMaskBtn, 400); };
   const rebuild = () => {
+    syncMaskBtn();
     list.replaceChildren();
     const fs = l.smart?.filters ?? [];
     if (!fs.length && !l.smart?.rawFilters?.length) { const e = document.createElement('div'); e.className = 'hint'; e.textContent = 'No smart filters yet. Filters stay editable: change or remove them any time and the layer is re-rendered from its original source.'; list.append(e); }
@@ -186,4 +198,18 @@ export async function openSmartFilters(doc: Doc, l: Layer) {
     f.p = { ...f.p, ...p }; await addSmartFilter(doc, l, f); rebuild();
   };
   rebuild(); panel.focus();
+}
+
+/** Layer ▸ Add Filter Mask: a white mask over the filter stack; paint black on it to keep parts of the object unfiltered. */
+export function addFilterMask(doc: Doc, l: Layer) {
+  if (!l.smart) return app.toast('Filter masks belong to smart objects');
+  if (l.smart.filterMask) { doc.setEditFilterMask(l, true); return; }
+  doc.editSmart('Add Filter Mask', l, () => { const m = makeCanvas(doc.width, doc.height), x = ctxOf(m); x.fillStyle = '#fff'; x.fillRect(0, 0, m.width, m.height); l.smart!.filterMask = m; });
+  doc.setEditFilterMask(l, true);
+}
+export function deleteFilterMask(doc: Doc, l: Layer) {
+  if (!l.smart?.filterMask) return;
+  const f = linkedFor(doc, l);
+  const done = (src?: HTMLCanvasElement) => doc.editSmart('Delete Filter Mask', l, () => { l.fmaskEdit = false; delete l.smart!.filterMask; if (src) draw(l, src); });
+  if (f) decodeLinked(f).then(done); else done();
 }

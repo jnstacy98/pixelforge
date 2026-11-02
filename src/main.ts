@@ -14,7 +14,7 @@ import { composite } from './render';
 import { editor } from './texttool';
 import { freeTransform, startFreeTransform } from './freetransform';
 import { COMBINE_OPS, combineSelected } from './shape';
-import { addSmartFilter, openSmartFilters, removeSmartFilter, updateSmartFilter, convertToSmart, editContents, isSmart, rasterizeSmart, transformSmart, updateSmart } from './smart';
+import { addFilterMask, deleteFilterMask, addSmartFilter, openSmartFilters, removeSmartFilter, updateSmartFilter, convertToSmart, editContents, isSmart, rasterizeSmart, transformSmart, updateSmart } from './smart';
 import { defineBrushTip } from './definetip';
 import { loadSavedTips } from './brushtips';
 import { openBlendIf } from './blendifdialog';
@@ -171,6 +171,7 @@ const menus: { title: string; items: () => Item[] }[] = [
       { label: 'Smart Object: Edit Contents', action: () => editContents(app.doc, app.doc.active, (d) => addDoc(d)) },
       { label: 'Smart Object: Transform…', action: () => transformSmart(app.doc, app.doc.active) },
       { label: 'Smart Filters…', action: () => openSmartFilters(app.doc, app.doc.active) },
+      app.doc.active.smart?.filterMask ? { label: 'Delete Filter Mask', action: () => deleteFilterMask(app.doc, app.doc.active) } : { label: 'Add Filter Mask', action: () => addFilterMask(app.doc, app.doc.active) },
       { label: 'Rasterize Layer', action: () => rasterizeSmart(app.doc, app.doc.active) },
     ] : [{ label: 'Convert to Smart Object', action: () => convertToSmart(app.doc, app.doc.active) }, ...(app.doc.active.isGroup || app.doc.active.adjustment ? [] : [{ label: 'Smart Filters…', action: () => openSmartFilters(app.doc, app.doc.active) }])]),
     ...(app.doc.smartSource ? [{ label: 'Update Smart Object', action: () => updateSmart(app.doc, (d) => switchTo(app.docs.indexOf(d))) }] : []),
@@ -406,7 +407,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
 };
 (window as any).__xform = freeTransform;
 (window as any).__combine = combineSelected;
-(window as any).__smartApi = { addSmartFilter, updateSmartFilter, removeSmartFilter, openSmartFilters, isSmart, convertToSmart, editContents, updateSmart, transformSmart, rasterizeSmart };
+(window as any).__smartApi = { addFilterMask, deleteFilterMask, addSmartFilter, updateSmartFilter, removeSmartFilter, openSmartFilters, isSmart, convertToSmart, editContents, updateSmart, transformSmart, rasterizeSmart };
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;
 

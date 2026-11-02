@@ -4,6 +4,7 @@ import { cloneFx, hasEffects } from './fx';
 import { renderStyled, type Styled } from './fxrender';
 import { blendInto, isCustomBlend } from './blend';
 import { applyBlendIf, isBlendIfActive, type BlendIf } from './blendif';
+import { blendFiltered, getCache } from './filtercache';
 import { clipToSelection } from './selection';
 
 const scratches: HTMLCanvasElement[] = [];
@@ -140,7 +141,7 @@ function maskAlphaFor(doc: Doc, layer: Layer, w: number, h: number) {
   if (live && doc.selMask && !live.unclipped) live = { ...live, canvas: clipToSelection(doc, live.canvas, scratch(4, w, h)) };
   let alpha: HTMLCanvasElement | null = null;
   if (layer.mask && layer.maskEnabled) {
-    alpha = live?.onMask ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h)) : layer.maskAlpha();
+    alpha = live?.onMask && !layer.fmaskEdit ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h)) : layer.maskAlpha();
   }
   return { live, alpha };
 }
@@ -166,6 +167,10 @@ function drawNode(doc: Doc, node: LayerNode, ctx: CanvasRenderingContext2D, incl
   if (layer.adjustment) { applyAdjustmentOnto(ctx, w, h, layer, alpha && !live?.onMask && layer.maskIsFull() ? null : alpha); return; }
   let src = layer.canvas;
   if (live && !live.onMask) src = withStroke(scratch(0, w, h), layer.canvas, live);
+  else if (live && layer.fmaskEdit && layer.smart?.filterMask) {          // painting on a smart filter mask: show the stroke by re-blending the cached renders
+    const cache = getCache(layer);
+    if (cache) { const out = scratch(10, w, h); blendFiltered(ctxOf(out), cache.U, cache.F, withStroke(scratch(11, w, h), layer.smart.filterMask, live)); src = out; }
+  }
   if (alpha) {
     const b = scratch(3, w, h), bx = ctxOf(b);
     bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over';
