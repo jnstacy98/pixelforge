@@ -54,6 +54,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 - Clipping masks: always "Blend Clipped Layers as Group" (Photoshop's default); the per-layer option to turn that off isn't supported. An adjustment layer can be clipped but can't be a clipping base. A clipped layer binds to whatever unclipped layer is below it in the same group, so moving layers around re-binds them (same as Photoshop).
 - Groups: a Pass Through group that has a layer-opacity below 100% or a mask is composited as an isolated group (so adjustments inside it stop reaching layers outside it). Ungrouping discards the group's own opacity/mask/blend. You can't merge a layer down into a group (use Merge Group). Clipping masks and vector masks are not supported.
 - Healing is applied when you release the mouse (you see a plain clone while dragging, like Photoshop). Spot Healing matches *colour* of the surroundings only — it can pick a poor source over strongly textured or patterned areas, in which case undo and use the Healing Brush with a hand-picked source.
+- Large images: slider drags in adjustment / filter dialogs and moving whole layers still repaint the entire image on every change (a few hundred ms at 12 MP in the software renderer); only brush-type edits repaint locally.
 - Adjustment layers: the blend mode combines the adjusted pixels with the ones below (so Color / Luminosity / Multiply etc. work), but there is no Fill opacity or Blend If on them. Each one holds a full-size blank pixel canvas, and each LUT-based adjustment costs a full-image pass per redraw (about 140 ms per layer at 12 megapixels in a software-rendered browser), so many adjustment layers on very large images will feel slower while painting. Text layers are saved as pixels, so they re-open as normal (rasterized) layers in PixelForge and Photoshop. Vector masks and mask feather/density are ignored.
 - TIFF: 16-bit files are reduced to 8 bits, CMYK is converted naively (no ICC profiles), JPEG-compressed TIFFs, BigTIFF and floating-point TIFFs were not tested and may not open, and export is flattened and uncompressed. No RAW support.
 
@@ -76,6 +77,22 @@ npm start           # build and launch the desktop app
 npm test            # unit tests (tone maths) + end-to-end tests (headless Chromium via Playwright; run `npm run build` first)
 npm run dist:win    # Windows installer + portable exe (electron-builder)
 ```
+
+## Performance on large images
+
+`npm run perf` (or `node tests/perf.mjs 24`) builds a synthetic multi-layer document of the given size and times the things you do all day. Measured in headless Chromium with *software* canvas rendering (so a desktop GPU will do better), 12 megapixels, 5 layers:
+
+| Operation | Before | After |
+| --- | --- | --- |
+| Brush stroke, repaint per mouse move | 83 ms | **17 ms** (frame-rate bound) |
+| …with two adjustment layers above the painted layer | ≈ 550 ms (a whole-image pass per adjustment, per move) | **16 ms** |
+| Start of a stroke | 64 ms | 23 ms |
+| Three adjustment layers (Levels, Curves, Brightness) full repaint | 559 ms | ≈ 160 ms |
+| Merge Down | 1159 ms | 107 ms |
+| PSD save (13 layers, 5 masks) | 5.2 s | ≈ 3 s |
+| PSD open (same file) | 6.6 s | ≈ 4 s |
+
+What changed: strokes repaint only the rectangle they touched (every working buffer is clipped to it, so the cost follows the brush, not the image — checked pixel-for-pixel against a full repaint for masks, groups, blend modes, adjustment layers and layer styles); undo data for a stroke is read from just the touched area instead of copying the whole layer at the start; runs of plain Levels / Curves / Invert layers are merged into one pass; uniform layer masks (the white mask of every adjustment layer) are stored in PSDs as a single colour instead of megapixels of pixels; Merge Down no longer copies layers that have nothing to bake; fresh white masks are known to be "reveal all" without scanning them; and the large working buffers are released after a few idle seconds. At 24 MP a stroke still repaints in about 22 ms.
 
 ## Roadmap
 Nothing outstanding from the original list — ideas welcome (more filters, per-point corner/smooth contour points).

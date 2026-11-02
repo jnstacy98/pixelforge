@@ -2204,6 +2204,52 @@ await gx(`${G.byName('Box')}.effects = { dropShadow: { on: true, color: '#000000
 const rtE = await page.evaluate(() => window.__fxRoundtrip([[150, 205]]));
 assert.deepEqual(rtE.fxAfter.Box.effects.dropShadow.contour.pts, [[0, 0], [60, 200], [255, 255]]); ok('a custom contour keeps its points through a PSD round trip');
 
+// 6ai. partial repaint: repainting only the changed rectangle equals a full repaint
+await page.evaluate(() => {
+  window.__blank(400, 300); const a = window.__app, d = a.doc; d.layers[0].ctx.fillStyle = '#88aacc'; d.layers[0].ctx.fillRect(0, 0, 400, 300);
+  const A = d.addLayer('A'); A.ctx.fillStyle = '#d04040'; A.ctx.fillRect(60, 60, 200, 150);
+  const M = d.addLayer('Masked'); M.ctx.fillStyle = '#40a040'; M.ctx.fillRect(100, 80, 200, 160); d.select(M); d.addMask('reveal'); d.setEditMask(M, false);
+  d.addAdjustmentLayer(window.__defaultAdj('curves'), 'Cv'); d.addAdjustmentLayer(window.__defaultAdj('hue'), 'Hu');
+  const S = d.addLayer('Styled'); S.ctx.fillStyle = '#ffd000'; S.ctx.fillRect(150, 120, 80, 80); S.effects = { dropShadow: { on: true, color: '#000000', opacity: 0.8, blend: 'multiply', angle: 120, distance: 14, spread: 0, size: 12 } };
+  const B = d.addLayer('Blend'); B.ctx.fillStyle = '#4060ff'; B.ctx.fillRect(40, 140, 260, 90); B.blend = 'linear-burn'; B.opacity = 0.7;
+  const P = d.addLayer('Painted'); P.ctx.fillStyle = '#ffffff'; P.ctx.fillRect(10, 10, 380, 280); P.blend = 'overlay';
+  d.emit('structure');
+});
+await wait();
+const partial = async (name, mutateSrc, rect) => {
+  const r = await page.evaluate(([src, rect]) => window.__partialCheck(rect, new Function(src)), [mutateSrc, rect]);
+  assert.equal(r.bad, 0, `${name}: ${r.bad} pixels differ (max ${r.max})`); assert.ok(r.changed > 0, `${name}: the edit changed nothing`); return r;
+};
+const paintOn = (layerName, color, x, y, w, h) => `const d = window.__app.doc, l = d.layers.find((q) => q.name === '${layerName}'); d.select(l); l.ctx.fillStyle = '${color}'; l.ctx.fillRect(${x}, ${y}, ${w}, ${h}); l.touchMask();`;
+await partial('plain layer under adjustments', paintOn('A', '#00ffff', 80, 80, 40, 40), { x: 80, y: 80, w: 40, h: 40 }); ok('partial repaint is exact for a layer below masks, adjustment layers and blend modes');
+await partial('styled layer', paintOn('Styled', '#00ff00', 160, 130, 30, 30), { x: 160 - 40, y: 130 - 40, w: 100, h: 100 }); ok('…and for a layer with a drop shadow (given the shadow’s reach)');
+await partial('blend-mode layer', paintOn('Blend', '#ff00ff', 60, 150, 50, 50), { x: 60, y: 150, w: 50, h: 50 }); ok('…and for a layer in a per-pixel blend mode');
+await partial('top layer', paintOn('Painted', '#000000', 200, 200, 60, 40), { x: 200, y: 200, w: 60, h: 40 }); ok('…and for the top layer (Overlay)');
+await partial('mask', `const d = window.__app.doc, l = d.layers.find((q) => q.name === 'Masked'); const m = l.mask; const x = m.getContext('2d'); x.fillStyle = '#000'; x.fillRect(120, 100, 50, 50); l.touchMask();`, { x: 120, y: 100, w: 50, h: 50 }); ok('…and when a layer mask is painted');
+await partial('clip + group', `const d = window.__app.doc; const l = d.layers.find((q) => q.name === 'A'); d.select(l); d.groupLayers([l, d.layers.find((q) => q.name === 'Masked')]); const g = d.layers.find((q) => q.isGroup); g.opacity = 0.8; g.blend = 'normal'; const t = d.layers.find((q) => q.name === 'A'); t.ctx.fillStyle = '#ffffff'; t.ctx.fillRect(70, 70, 30, 30); t.touchMask();`, { x: 0, y: 0, w: 400, h: 300 }); ok('…and with isolated groups');
+
+// 6aj. PSD masks are stored compactly and still round-trip exactly
+await page.evaluate(() => {
+  window.__blank(400, 300); const d = window.__app.doc;
+  const W = d.addLayer('White'); W.ctx.fillStyle = '#f00'; W.ctx.fillRect(0, 0, 400, 300); d.select(W); d.addMask('reveal'); d.setEditMask(W, false);
+  const K = d.addLayer('Black'); K.ctx.fillStyle = '#0f0'; K.ctx.fillRect(0, 0, 400, 300); d.select(K); d.addMask('hide'); d.setEditMask(K, false);
+  const P = d.addLayer('Partial'); P.ctx.fillStyle = '#00f'; P.ctx.fillRect(0, 0, 400, 300); d.select(P); d.addMask('reveal'); const m = P.mask.getContext('2d'); m.fillStyle = '#000'; m.fillRect(100, 50, 120, 90); m.fillStyle = '#808080'; m.fillRect(300, 250, 30, 20); d.setEditMask(P, false);
+  const A = d.addAdjustmentLayer(window.__defaultAdj('invert'), 'Adj'); d.emit('structure');
+});
+const mr = await page.evaluate(() => window.__maskRoundtrip([[0, 0], [150, 90], [310, 260], [399, 299], [50, 200], [100, 50], [219, 139], [220, 140]]));
+for (const n of ['White', 'Black', 'Partial', 'Adj']) assert.deepEqual(mr.after[n], mr.before[n], `${n} mask`);
+assert.deepEqual(mr.before.Partial, [255, 0, 128, 255, 255, 0, 0, 255]); ok('uniform (white / black) masks and a mask with painted islands come back from a PSD pixel-for-pixel');
+
+// 6ak. runs of plain adjustment layers are applied in one pass
+await page.evaluate(() => {
+  window.__blank(400, 300); const d = window.__app.doc, x = d.layers[0].ctx; const g = x.createLinearGradient(0, 0, 400, 300); g.addColorStop(0, '#102030'); g.addColorStop(0.5, '#a05030'); g.addColorStop(1, '#e0f0ff'); x.fillStyle = g; x.fillRect(0, 0, 400, 300);
+  const lv = d.addAdjustmentLayer(window.__defaultAdj('levels'), 'Lv'); lv.adjustment.P.rgb = { ib: 20, gamma: 1.4, iw: 235, ob: 5, ow: 250 }; lv.adjustment.P.b = { ib: 0, gamma: 0.8, iw: 255, ob: 0, ow: 255 };
+  const cv = d.addAdjustmentLayer(window.__defaultAdj('curves'), 'Cv'); cv.adjustment.P.rgb = [{ x: 0, y: 10 }, { x: 90, y: 140 }, { x: 255, y: 240 }]; cv.adjustment.P.r = [{ x: 0, y: 0 }, { x: 128, y: 90 }, { x: 255, y: 255 }];
+  d.addAdjustmentLayer(window.__defaultAdj('invert'), 'Inv'); d.emit('structure');
+});
+await wait();
+const fz = await page.evaluate(() => window.__fuseCheck()); assert.ok(fz.max <= 1, `fused vs separate differ by ${fz.max}`); ok('Levels + Curves + Invert in a row give the same pixels (±1) whether applied in one fused pass or one by one');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

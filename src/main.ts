@@ -10,7 +10,7 @@ import { formDialog } from './dialog';
 import { featherSelection, invertSelection } from './selection';
 import { defaultAdjustment } from './adjust';
 import { defaultFx, FX_TUNE } from './fx';
-import { composite } from './render';
+import { composite, compositeRect, renderFlags } from './render';
 import { editor } from './texttool';
 import { freeTransform, startFreeTransform } from './freetransform';
 import { COMBINE_OPS, combineSelected } from './shape';
@@ -354,6 +354,20 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const x = app.doc.selMask!.getContext('2d')!;
   return { edge: x.getImageData(100, 150, 1, 1).data[3], center: x.getImageData(150, 150, 1, 1).data[3] };
 };
+(window as any).__maskRoundtrip = async (pts: [number, number][]) => {
+  const { encode, importFile } = await import('./io');
+  const data = await encode(app.doc, 'psd');
+  const d2 = await importFile({ name: 'm.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
+  const samples = (d: Doc) => Object.fromEntries(d.layers.map((l) => [l.name, l.mask ? pts.map(([x, y]) => l.mask!.getContext('2d')!.getImageData(x, y, 1, 1).data[0]) : null]));
+  return { before: samples(app.doc), after: samples(d2), bytes: data.length };
+};
+(window as any).__psdTimes = async () => {
+  const { encode, importFile } = await import('./io');
+  const t0 = performance.now(), data = await encode(app.doc, 'psd'), t1 = performance.now();
+  await importFile({ name: 't.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
+  const t2 = performance.now(), png = await encode(app.doc, 'png'), t3 = performance.now();
+  return { encode: t1 - t0, import: t2 - t1, png: t3 - t2, psdBytes: data.length, pngBytes: png.length };
+};
 (window as any).__adjRoundtrip = async () => {
   const { encode, importFile } = await import('./io');
   const data = await encode(app.doc, 'psd');
@@ -362,6 +376,27 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
 };
 (window as any).__defaultAdj = defaultAdjustment;
 (window as any).__composite = (d: Doc, ctx: CanvasRenderingContext2D) => composite(d, ctx);
+/** Test hook: after `mutate` changes pixels inside `rect`, does repainting only `rect` give exactly the full repaint? */
+(window as any).__fuseCheck = () => {
+  const d = app.doc, mk = () => { const c = document.createElement('canvas'); c.width = d.width; c.height = d.height; return c; }, A = mk(), B = mk();
+  renderFlags.fuse = true; composite(d, A.getContext('2d', { willReadFrequently: true })!);
+  renderFlags.fuse = false; composite(d, B.getContext('2d', { willReadFrequently: true })!); renderFlags.fuse = true;
+  const a = A.getContext('2d')!.getImageData(0, 0, d.width, d.height).data, b = B.getContext('2d')!.getImageData(0, 0, d.width, d.height).data;
+  let max = 0; for (let i = 0; i < a.length; i++) max = Math.max(max, Math.abs(a[i] - b[i]));
+  return { max, sample: Array.from(a.slice(0, 4)) };
+};
+(window as any).__partialCheck = (rect: { x: number; y: number; w: number; h: number }, mutate: () => void) => {
+  const d = app.doc, mk = () => { const c = document.createElement('canvas'); c.width = d.width; c.height = d.height; return c; }, A = mk(), B = mk(), C = mk();
+  composite(d, A.getContext('2d')!);
+  mutate();
+  B.getContext('2d')!.drawImage(A, 0, 0);
+  compositeRect(d, B.getContext('2d', { willReadFrequently: true })!, rect);
+  composite(d, C.getContext('2d', { willReadFrequently: true })!);
+  const b = B.getContext('2d')!.getImageData(0, 0, d.width, d.height).data, c = C.getContext('2d')!.getImageData(0, 0, d.width, d.height).data;
+  let bad = 0, max = 0, changed = 0; const a = A.getContext('2d')!.getImageData(0, 0, d.width, d.height).data;
+  for (let i = 0; i < b.length; i++) { const e = Math.abs(b[i] - c[i]); if (e > 1) bad++; if (e > max) max = e; if (Math.abs(a[i] - c[i]) > 1) changed++; }
+  return { bad, max, changed };
+};
 (window as any).__groupRoundtrip = async (pts: [number, number][]) => {
   const { encode, importFile } = await import('./io');
   const sample = (d: Doc) => { const c = document.createElement('canvas'); c.width = d.width; c.height = d.height; const x = c.getContext('2d', { willReadFrequently: true })!; composite(d, x); return pts.map(([a, b]) => Array.from(x.getImageData(a, b, 1, 1).data)); };

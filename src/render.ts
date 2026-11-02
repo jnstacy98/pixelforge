@@ -1,5 +1,5 @@
-import { Doc, bakedCanvas, blendOp, buildTree, makeCanvas, ctxOf, grayToAlpha, type Layer, type LayerNode, type Stroke } from './doc';
-import { applyAdjustmentData, filterFor, isPixelAdjustment } from './adjust';
+import { clampRect, Doc, bakedCanvas, blendOp, buildTree, makeCanvas, ctxOf, grayToAlpha, type Layer, type LayerNode, type Rect, type Stroke } from './doc';
+import { applyAdjustmentData, applyLUTs, filterFor, isPixelAdjustment, lutsFor, type RGBLUTs } from './adjust';
 import { cloneFx, hasEffects } from './fx';
 import { renderStyled, type Styled } from './fxrender';
 import { blendInto, isCustomBlend } from './blend';
@@ -8,11 +8,25 @@ import { blendFiltered, getCache } from './filtercache';
 import { clipToSelection } from './selection';
 
 const scratches: HTMLCanvasElement[] = [];
+// Partial repaint: while CLIP is set, every working buffer is clipped to that rectangle too, so the cost of a frame follows
+// the size of the changed area, not of the whole image. (The buffers are only meaningful inside the rectangle then.)
+let CLIP: Rect | null = null;
+const clippedCtx = new Set<CanvasRenderingContext2D>();
+function withClip(c: HTMLCanvasElement) {
+  if (!CLIP) return c;
+  const x = ctxOf(c);
+  if (!clippedCtx.has(x)) { x.save(); x.beginPath(); x.rect(CLIP.x, CLIP.y, CLIP.w, CLIP.h); x.clip(); clippedCtx.add(x); }
+  return c;
+}
+/** The region pixel loops have to touch: the repaint clip, or the whole canvas. */
+const region = (w: number, h: number): Rect => CLIP ?? { x: 0, y: 0, w, h };
 function scratch(i: number, w: number, h: number) {
   let c = scratches[i];
   if (!c || c.width !== w || c.height !== h) c = scratches[i] = makeCanvas(w, h);
-  return c;
+  return withClip(c);
 }
+/** Free the big working buffers (they are re-created on demand): called when the editor has been idle for a while. */
+export function releaseRenderBuffers() { scratches.length = 0; groupBufs.length = 0; clipBufs.length = 0; clippedCtx.clear(); }
 
 /** `src` (placed at ox,oy) with its alpha scaled by the Blend If sliders, judged against what is already in `ctx`. */
 function withBlendIf(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, ox: number, oy: number, bi: BlendIf): HTMLCanvasElement {
@@ -55,17 +69,18 @@ export function applyAdjustmentOnto(ctx: CanvasRenderingContext2D, w: number, h:
   if (!alpha && layer.opacity >= 1 && blend === 'normal') {
     // Fast path (no mask, full opacity): the result is simply the adjusted pixels, so skip the blend scaffolding.
     if (isPixelAdjustment(a)) {
-      const img = ctx.getImageData(0, 0, w, h);
+      const R = region(w, h), img = ctx.getImageData(R.x, R.y, R.w, R.h);
       applyAdjustmentData(a, img.data);
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
-      ctx.putImageData(img, 0, 0);
+      ctx.putImageData(img, R.x, R.y);
     } else {
       const copy = scratch(5, w, h), cx = ctxOf(copy);
       cx.globalAlpha = 1; cx.globalCompositeOperation = 'source-over'; cx.filter = 'none';
       cx.clearRect(0, 0, w, h); cx.drawImage(ctx.canvas, 0, 0);
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
       ctx.clearRect(0, 0, w, h);
-      ctx.filter = filterFor(a) ?? 'none'; ctx.drawImage(copy, 0, 0); ctx.filter = 'none';
+      const R = region(w, h);
+      ctx.filter = filterFor(a) ?? 'none'; ctx.drawImage(copy, R.x, R.y, R.w, R.h, R.x, R.y, R.w, R.h); ctx.filter = 'none';
     }
     return;
   }
@@ -77,9 +92,9 @@ export function applyAdjustmentOnto(ctx: CanvasRenderingContext2D, w: number, h:
   ax.clearRect(0, 0, w, h);
   if (isPixelAdjustment(a)) {
     ax.drawImage(base, 0, 0);
-    const img = ax.getImageData(0, 0, w, h);
+    const R = region(w, h), img = ax.getImageData(R.x, R.y, R.w, R.h);
     applyAdjustmentData(a, img.data);
-    ax.putImageData(img, 0, 0);
+    ax.putImageData(img, R.x, R.y);
   } else {
     ax.filter = filterFor(a) ?? 'none'; ax.drawImage(base, 0, 0); ax.filter = 'none';
   }
@@ -109,12 +124,12 @@ const clipBufs: HTMLCanvasElement[] = [];
 function groupBuf(depth: number, w: number, h: number) {
   let c = groupBufs[depth];
   if (!c || c.width !== w || c.height !== h) c = groupBufs[depth] = makeCanvas(w, h);
-  return c;
+  return withClip(c);
 }
 function clipBuf(depth: number, w: number, h: number) {
   let c = clipBufs[depth];
   if (!c || c.width !== w || c.height !== h) c = clipBufs[depth] = makeCanvas(w, h);
-  return c;
+  return withClip(c);
 }
 const resetCtx = (x: CanvasRenderingContext2D) => { x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over'; x.filter = 'none'; };
 const blendIdFor = (l: Layer) => (l.isGroup && l.blend === 'pass through' ? 'normal' : l.blend);
@@ -123,7 +138,8 @@ const blendIdFor = (l: Layer) => (l.isGroup && l.blend === 'pass through' ? 'nor
 export function paint(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, x: number, y: number, opacity: number, blend: string) {
   if (opacity <= 0) return;
   if (isCustomBlend(blend)) {
-    const cw = ctx.canvas.width, ch = ctx.canvas.height, x0 = Math.max(0, x), y0 = Math.max(0, y), x1 = Math.min(cw, x + src.width), y1 = Math.min(ch, y + src.height);
+    const cw = ctx.canvas.width, ch = ctx.canvas.height, R = region(cw, ch);
+    const x0 = Math.max(0, x, R.x), y0 = Math.max(0, y, R.y), x1 = Math.min(cw, x + src.width, R.x + R.w), y1 = Math.min(ch, y + src.height, R.y + R.h);
     if (x1 <= x0 || y1 <= y0) return;
     const back = ctx.getImageData(x0, y0, x1 - x0, y1 - y0), source = ctxOf(src).getImageData(x0 - x, y0 - y, x1 - x0, y1 - y0);
     blendInto(back.data, source.data, blend, opacity);
@@ -141,7 +157,7 @@ function maskAlphaFor(doc: Doc, layer: Layer, w: number, h: number) {
   if (live && doc.selMask && !live.unclipped) live = { ...live, canvas: clipToSelection(doc, live.canvas, scratch(4, w, h)) };
   let alpha: HTMLCanvasElement | null = null;
   if (layer.mask && layer.maskEnabled) {
-    alpha = live?.onMask && !layer.fmaskEdit ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h)) : layer.maskAlpha();
+    alpha = live?.onMask && !layer.fmaskEdit ? grayToAlpha(withStroke(scratch(1, w, h), layer.mask, live), scratch(2, w, h), undefined, CLIP) : layer.maskAlpha();
   }
   return { live, alpha };
 }
@@ -241,9 +257,34 @@ function drawClipStack(doc: Doc, base: LayerNode, clipped: LayerNode[], ctx: Can
   paint(ctx, buf, 0, 0, b.opacity, blendIdFor(b));
 }
 
+/** The tone tables of an adjustment layer that can be merged with its neighbours: plain (opacity 100%, Normal, nothing masked out). */
+/** Test switch: turn run-fusing of adjustment layers off to compare against the plain one-by-one path. */
+export const renderFlags = { fuse: true };
+function fusableLUTs(doc: Doc, l: Layer): RGBLUTs | null {
+  if (!renderFlags.fuse || !l.adjustment || l.clipped || !l.visible || l.hiddenForEdit || l.opacity < 1 || l.blend !== 'normal') return null;
+  if (doc.stroke && doc.stroke.layer === l) return null;
+  if (l.mask && l.maskEnabled && !l.maskIsFull()) return null;
+  return lutsFor(l.adjustment);
+}
+const composeLUTs = (a: RGBLUTs, b: RGBLUTs): RGBLUTs => {
+  const f = (x: Uint8ClampedArray, y: Uint8ClampedArray) => Uint8ClampedArray.from(x, (v) => y[v]);
+  return { r: f(a.r, b.r), g: f(a.g, b.g), b: f(a.b, b.b) };
+};
+
 function drawNodes(doc: Doc, nodes: LayerNode[], ctx: CanvasRenderingContext2D, includeHidden: boolean, depth: number) {
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i];
+    const first = fusableLUTs(doc, node.layer);
+    if (first && i + 1 < nodes.length) {                              // Levels + Curves + Invert … in a row: one pass over the pixels instead of one each
+      let fused = first, j = i + 1;
+      for (; j < nodes.length; j++) { const n = fusableLUTs(doc, nodes[j].layer); if (!n) break; fused = composeLUTs(fused, n); }
+      if (j > i + 1) {
+        const w = doc.width, h = doc.height, R = region(w, h), img = ctx.getImageData(R.x, R.y, R.w, R.h);
+        applyLUTs(img.data, img.data, fused);
+        ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.putImageData(img, R.x, R.y);
+        i = j - 1; continue;
+      }
+    }
     let j = i + 1;
     // layers flagged "clipped" directly above this one are clipped to it (unless it is an adjustment layer or itself clipped)
     if (!node.layer.clipped && !node.layer.adjustment) while (j < nodes.length && nodes[j].layer.clipped) j++;
@@ -260,6 +301,27 @@ export function composite(doc: Doc, ctx: CanvasRenderingContext2D, includeHidden
   drawNodes(doc, buildTree(doc.layers), ctx, includeHidden, 0);
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
+}
+
+/**
+ * Repaint only `rect` of the document into ctx (what a brush stroke or other local edit needs). Everything outside the
+ * rectangle in ctx is left as it was, so the caller must only use this when nothing else changed.
+ */
+export function compositeRect(doc: Doc, ctx: CanvasRenderingContext2D, rect: Rect, includeHidden = false) {
+  const r = clampRect({ x: rect.x - 2, y: rect.y - 2, w: rect.w + 4, h: rect.h + 4 }, doc.width, doc.height);
+  if (!r) return;
+  CLIP = r;
+  try {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+    ctx.clearRect(r.x, r.y, r.w, r.h);
+    drawNodes(doc, buildTree(doc.layers), ctx, includeHidden, 0);
+    ctx.restore();
+  } finally {
+    for (const x of clippedCtx) x.restore();
+    clippedCtx.clear(); CLIP = null;
+  }
 }
 
 export function flatten(doc: Doc, background: string | null = null): HTMLCanvasElement {

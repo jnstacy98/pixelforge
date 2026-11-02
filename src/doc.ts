@@ -2,7 +2,7 @@ import { History } from './history';
 import { renderText, textLabel, type TextData } from './text';
 import { cloneAdjustment, type AdjustmentData } from './adjust';
 import { applyAdjustmentOnto, composite, renderedCanvas } from './render';
-import { cloneFx, type LayerEffects } from './fx';
+import { cloneFx, hasEffects, type LayerEffects } from './fx';
 import { cloneBlendIf, type BlendIf } from './blendif';
 import { cloneShape, type ShapeData } from './shapemath';
 import { cloneSmart, type LinkedFile, type SmartInfo } from './smartmath';
@@ -61,10 +61,11 @@ export const blendOp = (id: string): GlobalCompositeOperation =>
   BLEND_MODES.find((b) => b.id === id)?.op ?? 'source-over';
 
 /** Convert a grayscale mask (white = visible) into an alpha-only canvas usable with destination-in. */
-export function grayToAlpha(src: HTMLCanvasElement, dst: HTMLCanvasElement, stats?: { full: boolean }): HTMLCanvasElement {
+export function grayToAlpha(src: HTMLCanvasElement, dst: HTMLCanvasElement, stats?: { full: boolean }, region?: Rect | null): HTMLCanvasElement {
   const w = src.width, h = src.height;
   if (dst.width !== w || dst.height !== h) { dst.width = w; dst.height = h; }
-  const img = ctxOf(src).getImageData(0, 0, w, h), d = img.data;
+  const rg = region ?? { x: 0, y: 0, w, h };                                // (only this part is converted when a partial repaint asks for it)
+  const img = ctxOf(src).getImageData(rg.x, rg.y, rg.w, rg.h), d = img.data;
   let min = 255;
   for (let i = 0; i < d.length; i += 4) {
     const a = ((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8) * d[i + 3] / 255;
@@ -72,7 +73,7 @@ export function grayToAlpha(src: HTMLCanvasElement, dst: HTMLCanvasElement, stat
     d[i] = d[i + 1] = d[i + 2] = 0;
   }
   if (stats) stats.full = min >= 254.5;
-  ctxOf(dst).putImageData(img, 0, 0);
+  ctxOf(dst).putImageData(img, rg.x, rg.y);
   return dst;
 }
 
@@ -137,7 +138,11 @@ export class Layer {
   get target() { return this.fmaskEdit && this.fmask ? this.fmask : this.maskMode ? this.mask! : this.canvas; }
   get tctx() { return ctxOf(this.target); }
   touchMask() { this.maskVer++; this.rev++; }
+  private alphaPrimed = false;
+  /** Declare the mask (just created as pure white) fully revealing, so the first repaint doesn't have to scan 12 million pixels to find that out. */
+  primeFullMask() { this.alphaFull = true; this.alphaVer = this.maskVer; this.alphaPrimed = true; }
   maskAlpha(): HTMLCanvasElement {
+    if (this.alphaPrimed) { this.alphaPrimed = false; this.alphaVer = -1; }          // somebody needs the real alpha canvas: compute it
     if (!this.alphaCanvas) this.alphaCanvas = makeCanvas(this.mask!.width, this.mask!.height);
     if (this.alphaVer !== this.maskVer || this.alphaCanvas.width !== this.mask!.width || this.alphaCanvas.height !== this.mask!.height) {
       const stats = { full: false };
@@ -148,7 +153,7 @@ export class Layer {
     return this.alphaCanvas;
   }
   /** True when the (enabled) mask reveals everything, so it can be ignored when compositing. */
-  maskIsFull(): boolean { this.maskAlpha(); return this.alphaFull; }
+  maskIsFull(): boolean { if (this.alphaPrimed && this.alphaVer === this.maskVer) return true; this.maskAlpha(); return this.alphaFull; }
 }
 
 /** Layer pixels with the (enabled) mask applied. */
@@ -200,7 +205,7 @@ export class Doc {
   history = new History();
   view: { zoom: number; panX: number; panY: number } | null = null;
   path: string | null = null;
-  private subs = new Set<(k: ChangeKind) => void>();
+  private subs = new Set<(k: ChangeKind, rect?: Rect) => void>();
   /** Extra layers selected in the panel (Ctrl/Shift+click) for grouping; the active layer is always included. */
   multi = new Set<Layer>();
   /** Shown to the user when an operation is refused (set by the app). */
@@ -224,11 +229,12 @@ export class Doc {
     return d;
   }
 
-  on(fn: (k: ChangeKind) => void) { this.subs.add(fn); return () => this.subs.delete(fn); }
-  emit(k: ChangeKind) {
+  on(fn: (k: ChangeKind, rect?: Rect) => void) { this.subs.add(fn); return () => this.subs.delete(fn); }
+  /** `rect`: for 'pixels' events, the only region that changed (the viewer then repaints just that part). */
+  emit(k: ChangeKind, rect?: Rect) {
     // style caches are keyed by `rev`: structural changes may touch any layer, live pixel edits the active one
     if (k === 'structure') for (const l of this.layers) l.rev++; else if (k === 'pixels' && this.active) this.active.rev++;
-    this.subs.forEach((f) => f(k));
+    this.subs.forEach((f) => f(k, rect));
   }
 
   select(layer: Layer) { this.active = layer; this.emit('structure'); }
@@ -521,7 +527,7 @@ export class Doc {
     l.adjustment = cloneAdjustment(data);
     const m = makeCanvas(this.width, this.height), x = ctxOf(m);
     x.fillStyle = '#fff'; x.fillRect(0, 0, m.width, m.height);
-    l.mask = m; l.editMask = true;
+    l.mask = m; l.editMask = true; l.primeFullMask();
     l.parent = this.active.parent;
     const at = this.layers.indexOf(this.active) + 1, prev = this.active;
     this.layers.splice(at, 0, l);
@@ -591,16 +597,18 @@ export class Doc {
     if (below.clipped && !l.clipped) { this.notice('Release the clipping mask first (or use Merge Clipping Mask)'); return; }
     const belowBefore = captureLayer(below);
     const prevActive = this.active;
-    const merged = renderedCanvas(below);        // bake the lower layer's mask and styles first
+    const bakes = (q: Layer) => !!(q.mask && q.maskEnabled) || hasEffects(q.effects) || q.fillOpacity < 1;   // nothing to bake → no need to copy the whole canvas
+    const merged = bakes(below) ? renderedCanvas(below) : below.canvas;        // bake the lower layer's mask and styles first
     below.canvas = merged; below.mask = null; below.editMask = false; below.text = null; below.shape = null; below.effects = null; below.fillOpacity = 1; below.smart = null;
     const bctx = below.ctx;
     if (l.adjustment) {
       // an adjustment merged down is applied to the layer below only
       if (l.visible) applyAdjustmentOnto(bctx, this.width, this.height, l, l.mask && l.maskEnabled && !l.maskIsFull() ? l.maskAlpha() : null);
     } else {
-      const content = renderedCanvas(l);
+      let content = bakes(l) ? renderedCanvas(l) : l.canvas;
       const base = l.clipped ? this.clipBase(l) : null;
       if (base) {                                   // a clipped layer only contributes where its base has pixels
+        if (content === l.canvas) content = cloneCanvas(content);
         const cx = ctxOf(content);
         cx.globalCompositeOperation = 'destination-in';
         cx.drawImage(base === below ? merged : bakedCanvas(base), 0, 0);
@@ -654,6 +662,7 @@ export class Doc {
         x.drawImage(white, 0, 0);
       }
       l.mask = m; l.maskEnabled = true; l.editMask = true; l.touchMask(); this.active = l;
+      if (kind === 'reveal') l.primeFullMask();
     });
   }
   deleteMask(l = this.active) {
@@ -798,13 +807,13 @@ export const clampRect = (r: Rect, w: number, h: number): Rect | null => {
  */
 /** Late-bound callbacks (set by the smart-object module). */
 export const hooks = { fmaskChanged: (_l: Layer) => {} };
-export function pushPixelEdit(doc: Doc, layer: Layer, before: HTMLCanvasElement, rect: Rect | null, label: string) {
+export function pushPixelEdit(doc: Doc, layer: Layer, before: HTMLCanvasElement | ImageData, rect: Rect | null, label: string) {
   const isMask = layer.maskMode;
   const fm = isMask && layer.fmaskEdit && !!layer.fmask, get = () => (fm ? layer.fmask! : isMask ? layer.mask! : layer.canvas);
   const changed = () => { if (fm) hooks.fmaskChanged(layer); };
   const r = rect && clampRect(rect, get().width, get().height);
   if (!r) return;
-  const b = ctxOf(before).getImageData(r.x, r.y, r.w, r.h);
+  const b = before instanceof ImageData ? before : ctxOf(before).getImageData(r.x, r.y, r.w, r.h);   // (an ImageData is the region `rect` already, taken before the edit)
   const a = ctxOf(get()).getImageData(r.x, r.y, r.w, r.h);
   const rasterized = !isMask ? layer.text : null, rasterShape = !isMask ? layer.shape : null;
   if (rasterized) layer.text = null;

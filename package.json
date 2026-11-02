@@ -15,7 +15,8 @@
     "dist": "npm run build && electron-builder",
     "dist:win": "npm run build && electron-builder --win",
     "test": "node tests/unit.mjs && node tests/e2e.mjs",
-    "test:psd": "node tests/fetch-psd-fixtures.mjs && node tests/real-psd.mjs tests/.psd-fixtures --check tests/psd-budgets.json"
+    "test:psd": "node tests/fetch-psd-fixtures.mjs && node tests/real-psd.mjs tests/.psd-fixtures --check tests/psd-budgets.json",
+    "perf": "npm run build && node tests/perf.mjs"
   },
   "build": {
     "appId": "dev.pixelforge.app",

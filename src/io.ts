@@ -95,11 +95,11 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
   for (const f of psd.linkedFiles ?? []) if (f.data && f.id) doc.linked.push({ id: f.id, name: f.name || 'Linked file', type: f.type, data: f.data.slice() });
   /** Expand a PSD mask rectangle to a document-sized grayscale mask (filled with the mask's default colour). */
   const importMask = (c: PsdLayer, l: Layer) => {
-    if (!c.mask?.canvas) return;
+    if (!c.mask || (!c.mask.canvas && c.mask.defaultColor === undefined)) return;
     const m = makeCanvas(psd.width, psd.height), mx = ctxOf(m), dc = c.mask.defaultColor ?? 0;
     mx.fillStyle = `rgb(${dc},${dc},${dc})`; mx.fillRect(0, 0, m.width, m.height);
     const rel = c.mask.positionRelativeToLayer ? (c.left ?? 0) : 0, relY = c.mask.positionRelativeToLayer ? (c.top ?? 0) : 0;
-    mx.drawImage(c.mask.canvas, (c.mask.left ?? 0) + rel, (c.mask.top ?? 0) + relY);
+    if (c.mask.canvas) mx.drawImage(c.mask.canvas, (c.mask.left ?? 0) + rel, (c.mask.top ?? 0) + relY);   // (a uniform mask is stored as just its default colour)
     l.mask = m; l.maskEnabled = !c.mask.disabled;
   };
   const walk = (children: PsdLayer[], parent: Layer | null) => {
@@ -177,11 +177,11 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
           ...(isBlendIfActive(l.blendIf) ? { blendingRanges: toPsdRanges(l.blendIf) } : {}),
           ...(l.isGroup ? { children: n.children.map(toPsd), opened: !l.collapsed } : l.adjustment ? { adjustment: toPsdAdjustment(l.adjustment) } : { canvas: l.canvas }),
           blendMode: l.blend as PsdLayer['blendMode'],
-          mask: l.mask ? { canvas: l.mask, left: 0, top: 0, right: doc.width, bottom: doc.height, defaultColor: 0, disabled: !l.maskEnabled } : undefined,
+          mask: l.mask ? { ...packMask(l.mask), disabled: !l.maskEnabled } : undefined,
         };
       }),
     };
-    return new Uint8Array(writePsd(psd, { generateThumbnail: true }));
+    return new Uint8Array(writePsd(psd, { generateThumbnail: true, trimImageData: true }));
   }
   const flat = flatten(doc, fmt === 'jpeg' || fmt === 'bmp' ? '#ffffff' : null);
   if (fmt === 'bmp') return encodeBmp(flat);
@@ -248,4 +248,19 @@ function usedLinked(doc: Doc) {
 function placedFor(l: Layer) {
   const s = l.smart!, list = [...toPsdFilters(s.filters ?? []), ...(s.rawFilters ?? [])];
   return list.length ? { ...s.placed, filter: { enabled: true, validAtPosition: true, maskEnabled: true, maskLinked: true, maskExtendWithWhite: false, list } } : s.placed;
+}
+
+/**
+ * A layer mask in PSD form without storing needless pixels: a uniform mask (the usual all-white adjustment-layer mask) is just
+ * its default colour; otherwise only the part that differs from the border colour is written.
+ */
+export function packMask(m: HTMLCanvasElement) {
+  const W = m.width, H = m.height, d = ctxOf(m).getImageData(0, 0, W, H).data, def = d[0];
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for (let y = 0; y < H; y++) for (let x = 0, i = y * W * 4; x < W; x++, i += 4) if (d[i] !== def) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  if (x1 < 0) return { top: 0, left: 0, bottom: 0, right: 0, defaultColor: def };
+  if (x0 === 0 && y0 === 0 && x1 === W - 1 && y1 === H - 1) return { canvas: m, left: 0, top: 0, right: W, bottom: H, defaultColor: def };
+  const c = makeCanvas(x1 - x0 + 1, y1 - y0 + 1);
+  ctxOf(c).drawImage(m, -x0, -y0);
+  return { canvas: c, left: x0, top: y0, right: x1 + 1, bottom: y1 + 1, defaultColor: def };
 }

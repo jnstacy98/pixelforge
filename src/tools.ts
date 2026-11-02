@@ -1,5 +1,6 @@
 import { app, hexToRgb, rgbToHex, paintColor, grayOf, type ToolId } from './state';
 import { TextTool } from './texttool';
+import { fxMargin } from './fx';
 import { shapeTool } from './shape';
 import { freeTransform } from './freetransform';
 import { getTip } from './brushtips';
@@ -28,6 +29,8 @@ export interface Tool {
   /** Keyboard hook while this tool is active; return true if handled. */
   key?(e: KeyboardEvent): boolean;
 }
+
+const unionRect = (a: Rect, b: Rect): Rect => { const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y), x1 = Math.max(a.x + a.w, b.x + b.w), y1 = Math.max(a.y + a.h, b.y + b.h); return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }; };
 
 // ---------------------------------------------------------------- brush stamps
 const stampCache = new Map<string, HTMLCanvasElement>();
@@ -105,8 +108,8 @@ class PaintTool implements Tool {
   brushCursor = true;
   private last: Pt | null = null;
   private carry = 0;
-  private before!: HTMLCanvasElement;
   private dirty: Rect | null = null;
+  private moveRect: Rect | null = null;       // area touched since the last repaint request
   private layer!: Layer;
   private active = false;
   private onMask = false;
@@ -129,7 +132,6 @@ class PaintTool implements Tool {
     const doc = app.doc;
     this.layer = doc.active;
     this.onMask = this.layer.maskMode;
-    this.before = cloneCanvas(this.layer.target);
     if (!strokeCanvas || strokeCanvas.width !== doc.width || strokeCanvas.height !== doc.height) strokeCanvas = makeCanvas(doc.width, doc.height);
     const sctx = ctxOf(strokeCanvas);
     sctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -140,7 +142,7 @@ class PaintTool implements Tool {
     this.dirty = null; this.carry = 0; this.active = true;
     this.dab(p);
     this.last = p;
-    doc.emit('pixels');
+    this.flushRect();
   }
 
   /** Alt+click sets the source; otherwise prepare a clone stroke. Returns false when no stroke should start. */
@@ -199,6 +201,7 @@ class PaintTool implements Tool {
     ctx.drawImage(img, x, y);
     const r = img.width;
     const d = { x: x - 1, y: y - 1, w: r + 2, h: r + 2 };
+    this.moveRect = this.moveRect ? unionRect(this.moveRect, d) : d;
     if (!this.dirty) this.dirty = d;
     else {
       const x0 = Math.min(this.dirty.x, d.x), y0 = Math.min(this.dirty.y, d.y);
@@ -278,7 +281,15 @@ class PaintTool implements Tool {
     }
     this.carry = pos - d;
     this.last = p;
-    app.doc.emit('pixels');
+    this.flushRect();
+  }
+
+  /** Ask for a repaint of just the part of the canvas the latest dabs touched. */
+  private flushRect() {
+    let r = this.moveRect; this.moveRect = null;
+    const fx = this.layer?.effects;
+    if (r && fx) { const m = Math.ceil(fxMargin(fx)) + 4; r = { x: r.x - m, y: r.y - m, w: r.w + 2 * m, h: r.h + 2 * m }; }   // shadows, glows and strokes reach beyond the dab
+    app.doc.emit('pixels', r ?? undefined);
   }
 
   up() {
@@ -289,14 +300,17 @@ class PaintTool implements Tool {
     if ((this.isHeal || this.isSpot) && this.dirty) { if (!this.healStroke()) this.dirty = null; }
     if (this.isSpot) s.opacity = 1;
     if (doc.selMask) clipToSelection(doc, strokeCanvas!, strokeCanvas!);
-    const ctx = this.layer.tctx;
+    const ctx = this.layer.tctx, tgt = this.layer.target;
+    const rect = this.dirty && clampRect(this.dirty, tgt.width, tgt.height);
+    const before = rect ? ctx.getImageData(rect.x, rect.y, rect.w, rect.h) : null;      // only the touched area is remembered for undo (the layer itself is untouched until now)
     ctx.save();
     ctx.globalAlpha = s.opacity;
     ctx.globalCompositeOperation = this.erasing ? 'destination-out' : 'source-over';
     ctx.drawImage(s.canvas, 0, 0);
     ctx.restore();
     doc.stroke = null;
-    pushPixelEdit(doc, this.layer, this.before, this.dirty, this.isHeal ? 'Healing Brush' : this.isSpot ? 'Spot Healing' : this.isClone ? 'Clone Stamp' : this.erase ? 'Eraser' : 'Brush Stroke');
+    if (rect && before) pushPixelEdit(doc, this.layer, before, rect, this.isHeal ? 'Healing Brush' : this.isSpot ? 'Spot Healing' : this.isClone ? 'Clone Stamp' : this.erase ? 'Eraser' : 'Brush Stroke');
+    else doc.emit('structure');
     this.snap = null;
   }
 }

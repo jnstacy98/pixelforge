@@ -1,9 +1,13 @@
 import type { Doc } from './doc';
-import { composite } from './render';
+import { composite, compositeRect, releaseRenderBuffers } from './render';
 import { app } from './state';
 import { tools, type Pt } from './tools';
 import { ctxOf } from './doc';
 import { outlineOf } from './selection';
+
+let idleTimer = 0;
+/** After a few quiet seconds give back the big working buffers (they are re-created when needed). */
+const idleRelease = () => { clearTimeout(idleTimer); idleTimer = window.setTimeout(releaseRenderBuffers, 4000); };
 
 export class Viewer {
   zoom = 1; panX = 0; panY = 0;
@@ -44,12 +48,13 @@ export class Viewer {
     this.unsub?.();
     this.doc = doc;
     this.canvas.width = doc.width; this.canvas.height = doc.height;
-    this.unsub = doc.on((k) => {
+    this.unsub = doc.on((k, rect) => {
       if (this.canvas.width !== doc.width || this.canvas.height !== doc.height) {
-        this.canvas.width = doc.width; this.canvas.height = doc.height; this.fit();
+        this.canvas.width = doc.width; this.canvas.height = doc.height; this.fit(); this.needFull = true;
       }
-      if (k === 'structure' || k === 'pixels') this.requestRender(); else this.drawOverlay();
+      if (k === 'structure' || k === 'pixels') this.requestRender(k === 'pixels' ? rect : undefined); else this.drawOverlay();
     });
+    this.needFull = true;
     this.sizeOverlay();
     if (doc.view) { ({ zoom: this.zoom, panX: this.panX, panY: this.panY } = doc.view); this.applyTransform(); }
     else this.fit();
@@ -151,13 +156,25 @@ export class Viewer {
     this.stage.style.cursor = this.spaceDown || app.toolId === 'hand' ? 'grab' : t.cursor;
   }
 
-  requestRender() {
+  /** Repaint everything, or — when a local edit says which part changed — only that part. */
+  private needFull = true;
+  private dirty: { x: number; y: number; w: number; h: number } | null = null;
+  requestRender(rect?: { x: number; y: number; w: number; h: number }) {
+    if (!rect) this.needFull = true;
+    else if (!this.needFull) {
+      const d = this.dirty;
+      if (!d) this.dirty = { ...rect };
+      else { const x0 = Math.min(d.x, rect.x), y0 = Math.min(d.y, rect.y), x1 = Math.max(d.x + d.w, rect.x + rect.w), y1 = Math.max(d.y + d.h, rect.y + rect.h); this.dirty = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }; }
+    }
     if (this.raf) return;
     this.raf = requestAnimationFrame(() => {
       this.raf = 0;
       if (!this.doc) return;
-      composite(this.doc, ctxOf(this.canvas));
+      const full = this.needFull || !this.dirty, r = this.dirty;
+      this.needFull = false; this.dirty = null;
+      if (full) composite(this.doc, ctxOf(this.canvas)); else compositeRect(this.doc, ctxOf(this.canvas), r!);
       this.drawOverlay();
+      idleRelease();
     });
   }
 
