@@ -6,6 +6,8 @@ import type { Pt, Tool } from './tools';
 import { currentMask } from './selection';
 import { draw as drawSmart, linkedFor, decodeLinked } from './smart';
 import { quadInfo, type Quad } from './smartmath';
+import { renderShape } from './shape';
+import { composeAbout, decompose, apply as applyMat, type ShapeData } from './shapemath';
 import { HANDLES, bezierMesh, corners, distortCorner, distortEdge, EDGE_CORNERS, inQuad, latticeFromQuad, meshBounds, perspectiveCorner, quadMesh, renderMesh, skewEdge, dragHandle, handlePos, rotateTo, toLocal, translateGrid, translateQuad, type Handle, type XForm } from './xformmath';
 export type { XForm } from './xformmath';
 
@@ -24,6 +26,8 @@ class FreeTransformTool implements Tool {
   private src!: HTMLCanvasElement;
   private before: HTMLCanvasElement | null = null;
   private smartMode = false;
+  private shapeMode = false;
+  private shapeLocal: { w: number; h: number } | null = null;
   private drag: Drag | null = null;
   /** Transform mode. Anything but 'affine' works on four corners (`quad`) or, for Warp, a 4×4 Bézier control lattice (`grid`). */
   mode: XMode = 'affine';
@@ -37,8 +41,17 @@ class FreeTransformTool implements Tool {
     const doc = app.doc, layer = doc.active;
     if (layer.isGroup || layer.adjustment) return app.toast('Free Transform works on pixel, text and smart-object layers');
     if (!doc.requirePaintable() || layer.maskMode) return app.toast('Select the layer\'s pixels (not its mask) first');
-    this.doc = doc; this.layer = layer; this.prev = prev; this.smartMode = !!layer.smart && !doc.selection;
-    if (this.smartMode) {
+    this.doc = doc; this.layer = layer; this.prev = prev; this.smartMode = !!layer.smart && !doc.selection; this.shapeMode = !!layer.shape && !doc.selection;
+    if (this.shapeMode) {                                                       // vector shape: transform its matrix, keep it a shape
+      const sh = layer.shape!, pad = Math.ceil(sh.stroke ? sh.strokeW / 2 : 0) + 2, sw = Math.ceil(sh.w) + 2 * pad, shh = Math.ceil(sh.h) + 2 * pad;
+      this.src = makeCanvas(sw, shh);
+      renderShape(this.src, { ...sh, T: [1, 0, 0, 1, pad + (sw - 2 * pad - sh.w) / 2, pad + (shh - 2 * pad - sh.h) / 2] } as ShapeData);
+      const d = decompose(sh.T), [cx, cy] = applyMat(sh.T, sh.w / 2, sh.h / 2);
+      this.shapeLocal = { w: sh.w, h: sh.h };
+      this.m = { w: sw, h: shh, cx, cy, sx: d.sx, sy: d.sy, angle: d.angle };
+      layer.hiddenForEdit = true; doc.emit('pixels');
+    }
+    if (this.smartMode && !this.shapeMode) {
       const f = linkedFor(doc, layer);
       if (!f) { this.smartMode = false; } else {
         this.src = await decodeLinked(f);
@@ -47,7 +60,7 @@ class FreeTransformTool implements Tool {
         layer.hiddenForEdit = true; doc.emit('pixels');             // the preview is drawn over the canvas, so hide the layer itself meanwhile
       }
     }
-    if (!this.smartMode) {
+    if (!this.smartMode && !this.shapeMode) {
       const W = layer.canvas.width, H = layer.canvas.height, sel = doc.selection;
       let r = sel ? clampRect(sel, W, H) : null;
       const data = layer.ctx.getImageData(0, 0, W, H).data, mask = sel && doc.selMask ? ctxOf(doc.selMask).getImageData(0, 0, W, H).data : null;
@@ -117,7 +130,7 @@ class FreeTransformTool implements Tool {
   /** Switch between Scale/Rotate, Skew, Distort, Perspective and Warp. Leaving the free-form modes for Scale/Rotate resets the shape. */
   setMode(mode: XMode) {
     if (!this.active || mode === this.mode) return;
-    if (mode !== 'affine' && this.smartMode) { app.toast('Perspective, distort and warp are not available on a smart object — rasterize it first'); app.emit('xform'); return; }
+    if (mode !== 'affine' && (this.smartMode || this.shapeMode)) { app.toast('Skew, distort, perspective and warp are not available on smart objects or vector shapes — rasterize first'); app.emit('xform'); return; }
     if (mode === 'affine') { this.m = { ...this.m0 }; this.quad = null; this.grid = null; }
     else {
       if (!this.quad && !this.grid) this.quad = corners(this.m);
@@ -145,7 +158,10 @@ class FreeTransformTool implements Tool {
     if (!this.active) return;
     this.end();
     const { doc, layer, m } = this;
-    if (this.smartMode) {
+    if (this.shapeMode) {
+      const loc = this.shapeLocal!;
+      doc.editShape('Free Transform', layer, () => { layer.shape!.T = composeAbout(loc.w, loc.h, m.cx, m.cy, m.sx, m.sy, m.angle); renderShape(layer.canvas, layer.shape!); layer.touchMask(); });
+    } else if (this.smartMode) {
       const p = layer.smart!.placed;
       doc.editSmart('Free Transform', layer, () => { p.transform = corners(m); drawSmart(layer, this.src); });
     } else if (this.mode !== 'affine') {

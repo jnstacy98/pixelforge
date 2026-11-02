@@ -2,6 +2,8 @@ import { app, type ToolId } from './state';
 import { BLEND_MODES, GROUP_BLEND_MODES, type Layer, type LayerNode } from './doc';
 import { FONTS } from './text';
 import { editAdjustment, newAdjustmentLayer } from './adjustdialog';
+import { renderShape } from './shape';
+import { cloneShape, type ShapeData } from './shapemath';
 import { ROUND, allTips } from './brushtips';
 import { openLayerStyle } from './stylesdialog';
 import { freeTransform } from './freetransform';
@@ -25,6 +27,7 @@ const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
   { id: 'spot', key: 'K', label: 'Spot Healing Brush', icon: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>') },
   { id: 'patch', key: 'P', label: 'Patch (draw a selection, then drag it)', icon: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8"/>') },
   { id: 'cmove', key: 'O', label: 'Content-Aware Move (draw around an object, then drag it)', icon: svg('<path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3"/><rect x="8.5" y="8.5" width="7" height="7" rx="1.5"/>') },
+  { id: 'shape', key: 'U', label: 'Shape (rectangle, ellipse, polygon, star, line, pen path)', icon: svg('<rect x="3" y="9" width="11" height="11" rx="2"/><circle cx="16" cy="8" r="5"/>') },
   { id: 'eraser', key: 'E', label: 'Eraser', icon: svg('<path d="M20 20H8l-4.6-4.6a1.4 1.4 0 010-2L13 3.8a1.4 1.4 0 012 0l5.6 5.6a1.4 1.4 0 010 2L11 21"/><path d="M7 11l6 6"/>') },
   { id: 'bucket', key: 'G', label: 'Paint Bucket', icon: svg('<path d="M19 11l-8-8-8.6 8.6a2 2 0 000 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11z"/><path d="M5 2l5 5M2 13h15"/><path d="M22 20a2 2 0 11-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4z"/>') },
   { id: 'gradient', key: 'D', label: 'Gradient', icon: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 17L17 7" stroke-dasharray="1 3"/>') },
@@ -141,6 +144,33 @@ export function renderOptions() {
     const ml = document.createElement('label'); const ms = document.createElement('select');
     ms.innerHTML = '<option value="free">Freehand</option><option value="poly">Polygonal</option>'; ms.value = app.lasso.mode; ms.onchange = () => (app.lasso.mode = ms.value as 'free' | 'poly'); ml.append('Mode', ms);
     el.append(ml, hintEl('Freehand: drag · Polygonal: click corners, click the first point / double-click / Enter to close, Backspace removes a point, Esc cancels · L toggles the mode · Shift = add · Alt = subtract'));
+  } else if (t === 'shape') {
+    const layer = app.doc.active, sh = layer.shape, o = app.shape;
+    // with a shape layer selected the controls edit that layer (live, undoable); otherwise they set the defaults for new shapes
+    const edit = (label: string, fn: (s: ShapeData) => void) => { if (!sh) return; app.doc.editShape(label, layer, () => { fn(layer.shape!); renderShape(layer.canvas, layer.shape!); layer.touchMask(); }); };
+    const lab = (txt: string, ...kids: HTMLElement[]) => { const l = document.createElement('label'); l.append(txt, ...kids); return l; };
+    const color = (get: () => string, set: (v: string) => void) => { const c = document.createElement('input'); c.type = 'color'; c.value = get(); c.onchange = () => set(c.value); return c; };
+    const check = (txt: string, get: () => boolean, set: (v: boolean) => void) => { const l = document.createElement('label'), c = document.createElement('input'); c.type = 'checkbox'; c.checked = get(); c.onchange = () => set(c.checked); l.append(c, txt); return l; };
+    const num = (get: () => number, set: (v: number) => void, min: number, max: number, step = 1) => { const i = document.createElement('input'); i.type = 'number'; i.min = String(min); i.max = String(max); i.step = String(step); i.style.width = '60px'; i.value = String(Math.round(get() * 100) / 100); i.onchange = () => { const v = Number(i.value); if (Number.isFinite(v)) set(Math.min(max, Math.max(min, v))); }; return i; };
+    if (!sh) {
+      const k = document.createElement('select');
+      k.innerHTML = '<option value="rect">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon">Polygon</option><option value="star">Star</option><option value="line">Line</option><option value="path">Pen path</option>';
+      k.value = o.kind; k.onchange = () => { o.kind = k.value as typeof o.kind; renderOptions(); };
+      el.append(lab('Shape', k));
+    } else el.append(hintEl(`Editing “${layer.name}”`));
+    const cur = sh ?? null;
+    el.append(
+      check('Fill', () => (cur ? !!cur.fill : o.useFill), (v) => (cur ? edit('Shape Fill', (s) => (s.fill = v ? (o.fill || '#3a7bd5') : null)) : ((o.useFill = v), 0))),
+      color(() => cur?.fill ?? o.fill, (v) => (cur ? edit('Shape Fill', (s) => (s.fill = v)) : ((o.fill = v), (o.useFill = true)))),
+      check('Stroke', () => (cur ? !!cur.stroke : o.useStroke), (v) => (cur ? edit('Shape Stroke', (s) => (s.stroke = v ? (o.stroke || '#000000') : null)) : ((o.useStroke = v), 0))),
+      color(() => cur?.stroke ?? o.stroke, (v) => (cur ? edit('Shape Stroke', (s) => (s.stroke = v)) : ((o.stroke = v), (o.useStroke = true)))),
+      lab('Width', num(() => cur?.strokeW ?? o.strokeW, (v) => (cur ? edit('Shape Stroke Width', (s) => (s.strokeW = v)) : (o.strokeW = v)), 0, 200)));
+    const kind = cur?.kind ?? o.kind;
+    if (kind === 'rect') el.append(lab('Corner radius', num(() => cur?.radius ?? o.radius, (v) => (cur ? edit('Corner Radius', (s) => (s.radius = v)) : (o.radius = v)), 0, 2000)));
+    if (kind === 'polygon' || kind === 'star') el.append(lab('Sides', num(() => cur?.sides ?? o.sides, (v) => (cur ? edit('Shape Sides', (s) => (s.sides = Math.round(v))) : (o.sides = Math.round(v))), 3, 60)));
+    if (kind === 'star') el.append(lab('Inner %', num(() => (cur?.inner ?? o.inner) * 100, (v) => (cur ? edit('Star Inner Radius', (s) => (s.inner = v / 100)) : (o.inner = v / 100)), 5, 98)));
+    el.append(hintEl(kind === 'path' ? 'Click corners · click the first point to close · Enter / double-click to finish · Backspace removes a point · Esc cancels' : 'Drag to draw · Shift = square / circle / 45° · Alt = from the centre · Ctrl+T transforms without losing sharpness'));
+    void cloneShape;
   } else if (t === 'transform') {
     const num = (label: string, get: () => number, set: (v: number) => void, step = 0.1) => {
       const l = document.createElement('label'), i = document.createElement('input'); i.type = 'number'; i.step = String(step); i.style.width = '72px';

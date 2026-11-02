@@ -1,5 +1,6 @@
 import { app, hexToRgb, rgbToHex, paintColor, grayOf, type ToolId } from './state';
 import { TextTool } from './texttool';
+import { shapeTool } from './shape';
 import { freeTransform } from './freetransform';
 import { getTip } from './brushtips';
 import { quantTilt, tiltShape } from './tilt';
@@ -378,6 +379,8 @@ class MoveTool implements Tool {
   private start: Pt | null = null;
   private items: { layer: Layer; get: () => HTMLCanvasElement; snap: HTMLCanvasElement }[] = [];
   private texts: { layer: Layer; x: number; y: number }[] = [];
+  private shapes: { layer: Layer; e: number; f: number }[] = [];
+  private rasterShape: Layer | null = null;     // a shape layer whose pixels are being moved through a selection: it stops being a shape
   private layers: Layer[] = [];
   private selMode = false;
   private selBefore: Rect | null = null;
@@ -401,6 +404,8 @@ class MoveTool implements Tool {
       }
     }
     this.texts = this.selMode ? [] : this.layers.filter((e) => e.text).map((e) => ({ layer: e, x: e.text!.x, y: e.text!.y }));
+    this.rasterShape = this.selMode && l.shape ? l : null;
+    this.shapes = this.selMode ? [] : this.layers.filter((e) => e.shape).map((e) => ({ layer: e, e: e.shape!.T[4], f: e.shape!.T[5] }));
     this.floating = this.selMode && doc.selMask ? clipToSelection(doc, this.items[0].snap) : null;   // selected pixels, cut out
   }
   move(p: Pt) {
@@ -429,6 +434,7 @@ class MoveTool implements Tool {
       if (this.selMaskBefore) doc.selShift = { dx, dy };
     }
     for (const t of this.texts) { t.layer.text!.x = t.x + dx; t.layer.text!.y = t.y + dy; }
+    for (const sh of this.shapes) { sh.layer.shape!.T[4] = sh.e + dx; sh.layer.shape!.T[5] = sh.f + dy; }
     for (const l of this.layers) l.touchMask();
     doc.emit('pixels');
   }
@@ -441,16 +447,20 @@ class MoveTool implements Tool {
     if (maskB && doc.selShift) { maskN = makeCanvas(maskB.width, maskB.height); ctxOf(maskN).drawImage(maskB, doc.selShift.dx, doc.selShift.dy); doc.selMask = maskN; }
     doc.selShift = null; this.floating = null;
     const after = items.map((it) => cloneCanvas(it.get()));
-    const textsAfter = texts.map((t) => ({ x: t.layer.text!.x, y: t.layer.text!.y }));
-    const put = (src: HTMLCanvasElement[], sel: Rect | null, sm: HTMLCanvasElement | null, txt: { x: number; y: number }[]) => {
+    const textsAfter = texts.map((t) => ({ x: t.layer.text!.x, y: t.layer.text!.y })), shapes = this.shapes, shapesAfter = shapes.map((q) => ({ e: q.layer.shape!.T[4], f: q.layer.shape!.T[5] }));
+    const put = (src: HTMLCanvasElement[], sel: Rect | null, sm: HTMLCanvasElement | null, txt: { x: number; y: number }[], shp: { e: number; f: number }[], undo: boolean) => {
       items.forEach((it, i) => { const c = it.get(), x = ctxOf(c); x.clearRect(0, 0, c.width, c.height); x.drawImage(src[i], 0, 0); });
       doc.selection = sel; doc.selMask = sm;
       texts.forEach((t, i) => { t.layer.text!.x = txt[i].x; t.layer.text!.y = txt[i].y; });
+      shapes.forEach((q, i) => { q.layer.shape!.T[4] = shp[i].e; q.layer.shape!.T[5] = shp[i].f; });
+      if (rs) rs.shape = undo ? rsShape : null;
       for (const l of layers) l.touchMask();
       doc.emit('structure');
     };
-    const before = items.map((it) => it.snap), textsBefore = texts.map((t) => ({ x: t.x, y: t.y }));
-    doc.history.push({ label: 'Move', undo: () => put(before, selB, maskB, textsBefore), redo: () => put(after, selN, maskN, textsAfter) });
+    const rs = this.rasterShape, rsShape = rs ? rs.shape : null;
+    if (rs) rs.shape = null;
+    const before = items.map((it) => it.snap), textsBefore = texts.map((t) => ({ x: t.x, y: t.y })), shapesBefore = shapes.map((q) => ({ e: q.e, f: q.f }));
+    doc.history.push({ label: 'Move', undo: () => put(before, selB, maskB, textsBefore, shapesBefore, true), redo: () => put(after, selN, maskN, textsAfter, shapesAfter, false) });
     doc.emit('structure');
   }
 }
@@ -475,5 +485,5 @@ class HandTool implements Tool { cursor = 'grab'; down() {} move() {} up() {} }
 
 export const tools: Record<ToolId, Tool> = {
   move: new MoveTool(), marquee: new MarqueeTool(), brush: new PaintTool('brush'), eraser: new PaintTool('eraser'),
-  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), quick: new QuickSelectTool(), clone: new PaintTool('clone'), heal: new PaintTool('heal'), spot: new PaintTool('spot'), patch: new PatchTool(), cmove: new ContentMoveTool(), transform: freeTransform,
+  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), quick: new QuickSelectTool(), clone: new PaintTool('clone'), heal: new PaintTool('heal'), spot: new PaintTool('spot'), patch: new PatchTool(), cmove: new ContentMoveTool(), transform: freeTransform, shape: shapeTool,
 };

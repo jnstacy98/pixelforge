@@ -1873,6 +1873,73 @@ await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.
 await page.evaluate(() => window.__xform.setMode('warp')); assert.equal(await page.evaluate(() => window.__xform.mode), 'affine'); ok('smart objects stay in Scale / Rotate mode (warp needs pixels)');
 await page.keyboard.press('Escape'); await wait();
 
+// 6aa. vector shapes
+const shScene = async (kind = 'rect', extra = {}) => {
+  await page.evaluate(([kind, extra]) => { window.__blank(400, 300); const a = window.__app; Object.assign(a.shape, { kind, fill: '#3a7bd5', useFill: true, stroke: '#000000', useStroke: false, strokeW: 4, radius: 0, sides: 5, inner: 0.5 }, extra); a.doc.setSelection(null); a.setTool('shape'); }, [kind, extra]);
+  await wait();
+};
+const topShape = () => page.evaluate(() => { const d = window.__app.doc, l = [...d.layers].reverse().find((x) => x.shape); return l ? { name: l.name, ...JSON.parse(JSON.stringify(l.shape)) } : null; });
+const shPx = (x, y) => page.evaluate(([x, y]) => { const l = [...window.__app.doc.layers].reverse().find((q) => q.shape); return [...l.ctx.getImageData(x, y, 1, 1).data]; }, [x, y]);
+const shDrag = async (a0, b0, key) => { const a = await toScreen(...a0), b = await toScreen(...b0); if (key) await page.keyboard.down(key); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 5 }); await page.mouse.up(); if (key) await page.keyboard.up(key); await wait(); };
+await shScene('rect');
+await shDrag([100, 100], [200, 160]);
+let sh1 = await topShape(); assert.ok(sh1 && sh1.kind === 'rect' && sh1.w === 100 && sh1.h === 60 && sh1.name === 'Rectangle 1', JSON.stringify(sh1)); ok('Shape tool: dragging draws a rectangle shape layer');
+assert.deepEqual(await shPx(150, 130), [58, 123, 213, 255]); assert.equal((await shPx(99, 130))[3], 0); assert.equal((await shPx(201, 130))[3], 0); ok('…filled with the chosen colour, with crisp edges');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await topShape(), null); ok('creating a shape is one undo step');
+await shDrag([100, 100], [200, 130], 'Shift'); sh1 = await topShape();
+assert.equal(sh1.w, sh1.h); ok('Shift draws a square');
+await shScene('ellipse'); await shDrag([100, 100], [200, 160]);
+assert.equal((await shPx(101, 101))[3], 0); assert.equal((await shPx(150, 130))[3], 255); assert.equal((await shPx(150, 101))[3], 255); ok('Ellipse: the corners of the box stay empty, the middle is filled');
+await shScene('rect', { useStroke: true, stroke: '#ff0000', strokeW: 10, useFill: false }); await shDrag([100, 100], [200, 160]);
+assert.deepEqual((await shPx(100, 130)).slice(0, 3), [255, 0, 0]); assert.equal((await shPx(150, 130))[3], 0); assert.equal((await shPx(94, 130))[3], 0); ok('a stroke-only shape draws a 10 px outline centred on the edge');
+await shScene('star', { sides: 5, inner: 0.4 }); await shDrag([100, 100], [200, 200]);
+assert.equal((await shPx(150, 150))[3], 255); assert.equal((await shPx(102, 102))[3], 0); assert.equal((await shPx(150, 112))[3], 255); ok("Star: five points around a filled centre");
+await shScene('line', { useStroke: true, stroke: '#00aa00', strokeW: 6 }); await shDrag([100, 100], [200, 100]);
+const ln = await topShape(); assert.ok(ln.kind === 'path' && !ln.closed && ln.fill === null && ln.name.startsWith('Line')); assert.deepEqual((await shPx(150, 100)).slice(0, 3), [0, 170, 0]); assert.equal((await shPx(150, 108))[3], 0); ok('Line: a two-point open path stroked in the stroke colour');
+
+// pen path
+await shScene('path');
+const penClick = async (x, y) => { const q = await toScreen(x, y); await page.mouse.click(q.x, q.y); await page.waitForTimeout(400); };
+for (const [x, y] of [[100, 200], [200, 200], [150, 120]]) await penClick(x, y);
+assert.equal(await topShape(), null); await penClick(101, 201);
+const pth = await topShape(); assert.ok(pth && pth.kind === 'path' && pth.closed && pth.pts.length === 3 && pth.name.startsWith('Path')); assert.equal((await shPx(150, 180))[3], 255); assert.equal((await shPx(110, 130))[3], 0); ok('Pen path: clicking corners then the first point closes a filled polygon shape');
+await page.keyboard.press('Control+z'); await wait();
+
+// editing through the options bar
+await shScene('rect'); await shDrag([100, 100], [200, 160]);
+await page.evaluate(() => { const c = document.querySelector('#options input[type=color]'); c.value = '#ff8800'; c.dispatchEvent(new Event('change', { bubbles: true })); });
+await wait(); assert.deepEqual((await shPx(150, 130)).slice(0, 3), [255, 136, 0]); ok('changing the Fill colour with a shape layer selected edits that layer (live re-render)');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Shape Fill');
+await page.evaluate(() => { const i = [...document.querySelectorAll('#options label')].find((l) => l.textContent.startsWith('Corner radius')).querySelector('input'); i.value = '30'; i.dispatchEvent(new Event('change', { bubbles: true })); });
+await wait(); assert.equal((await shPx(101, 101))[3], 0); assert.equal((await shPx(150, 101))[3], 255); ok('Corner radius rounds the rectangle’s corners (re-rendered from the vector data)');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal((await shPx(101, 101))[3], 255); ok('…and undoes');
+
+// move tool translates the data
+await page.evaluate(() => window.__app.setTool('move')); await wait();
+{ const a = await toScreen(150, 130), b = await toScreen(180, 140); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 4 }); await page.mouse.up(); await wait(); }
+sh1 = await topShape(); assert.deepEqual([sh1.T[4], sh1.T[5]], [130, 110]); ok('the Move tool moves the shape (its matrix, not just pixels)');
+await page.keyboard.press('Control+z'); await wait();
+sh1 = await topShape(); assert.deepEqual([sh1.T[4], sh1.T[5]], [100, 100]); ok('…and undoes');
+
+// free transform keeps it vector: crisp edges after a 2× scale
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+await page.evaluate(() => window.__xform.set({ sx: 2, sy: 2 })); await page.keyboard.press('Enter'); await wait();
+sh1 = await topShape(); assert.ok(Math.abs(sh1.T[0] - 2) < 1e-6 && Math.abs(sh1.T[3] - 2) < 1e-6 && sh1.w === 100); assert.equal((await shPx(51, 100))[3], 255); assert.equal((await shPx(49, 100))[3], 0); assert.equal((await shPx(249, 100))[3], 255); assert.equal((await shPx(251, 100))[3], 0); ok('Free Transform on a shape changes its matrix and re-renders: a 2× scale has razor-sharp edges (no resampling)');
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+await page.evaluate(() => window.__xform.set({ angle: 45 })); await page.keyboard.press('Enter'); await wait();
+assert.ok(Math.abs((await topShape()).T[1] - Math.SQRT2) < 1e-6); ok('…and rotating it later keeps it a shape (matrix rotated by 45°)');
+
+// painting rasterizes; undo brings the vector data back; duplicate keeps it
+await page.evaluate(() => { const a = window.__app; a.fg = '#ff0000'; Object.assign(a.brush, { size: 10, hardness: 1, opacity: 1, flow: 1, spacing: 0.25, tip: 'round', angle: 0, follow: false, tilt: true }); a.setTool('brush'); });
+{ const q = await toScreen(150, 130); await page.mouse.click(q.x, q.y); await wait(); }
+assert.equal(await topShape(), null); ok('painting on a shape layer rasterizes it');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(await topShape()); ok('…and undo restores the vector data');
+await page.evaluate(() => window.__app.doc.duplicateLayer()); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.layers.filter((l) => l.shape).length), 2); ok('duplicating a shape layer duplicates its vector data');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

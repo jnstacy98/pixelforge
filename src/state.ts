@@ -3,7 +3,7 @@ import type { LayerEffects } from './fx';
 import { FONTS } from './text';
 import type { Viewer } from './viewer';
 
-export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand' | 'quick' | 'clone' | 'heal' | 'spot' | 'patch' | 'cmove' | 'transform';
+export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand' | 'quick' | 'clone' | 'heal' | 'spot' | 'patch' | 'cmove' | 'transform' | 'shape';
 
 type Evt = 'tool' | 'color' | 'doc' | 'options' | 'history' | 'textstyle' | 'textsync' | 'xform';
 
@@ -29,6 +29,7 @@ class App {
   cmove = { mode: 'move' as 'move' | 'extend', blend: true };
   patch = { mode: 'source' as 'source' | 'dest' | 'content', blend: true };
   marquee = { shape: 'rect' as 'rect' | 'ellipse' };
+  shape = { kind: 'rect' as 'rect' | 'ellipse' | 'polygon' | 'star' | 'line' | 'path', fill: '#3a7bd5', useFill: true, stroke: '#000000', useStroke: false, strokeW: 4, radius: 0, sides: 5, inner: 0.5 };
   lasso = { mode: 'free' as 'free' | 'poly' };
   quick = { size: 40, tolerance: 32 };
   wand = { allLayers: false };

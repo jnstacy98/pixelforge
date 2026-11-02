@@ -170,6 +170,32 @@ t('perspective / distort / warp maths: homography, Bézier mesh, mesh rasteriser
   assert.deepEqual(FT.translateQuad(q, 5, -5).slice(0, 4), [5, -5, 105, -5]);
 });
 
+// ---- vector shapes
+import * as SH from '../src/shapemath.ts';
+t('vector shapes: geometry, bounds, transforms, drag modifiers, paths, decompose/compose', () => {
+  const r = SH.makeShape('rect', 100, 50, 10, 20), near1 = (a, b, e = 1e-6) => a.every((v, i) => Math.abs(v - b[i]) < e);
+  assert.deepEqual(SH.shapeCmds(r), [['M', 10, 20], ['L', 110, 20], ['L', 110, 70], ['L', 10, 70], ['Z']]);
+  const b = SH.shapeBounds(r); assert.deepEqual([b.x0, b.y0, b.x1, b.y1], [10, 20, 110, 70]);
+  const rs = SH.makeShape('rect', 100, 50, 0, 0, { stroke: '#000', strokeW: 10 }); assert.equal(SH.shapeBounds(rs).x0, -6);                        // half the stroke + 1 px AA
+  const rr = SH.localCmds(SH.makeShape('rect', 100, 50, 0, 0, { radius: 999 })); assert.ok(rr.filter((c) => c[0] === 'C').length === 4);          // radius is clamped to half the short side
+  assert.ok(rr.every((c) => c[0] === 'Z' || c.slice(1).every((v) => v >= -1e-9 && v <= 100 + 1e-9)));
+  const el = SH.localCmds(SH.makeShape('ellipse', 80, 40, 0, 0)); assert.deepEqual(el[0], ['M', 80, 20]); assert.equal(el.filter((c) => c[0] === 'C').length, 4);
+  const tri = SH.localCmds(SH.makeShape('polygon', 100, 100, 0, 0, { sides: 3 })); assert.equal(tri.filter((c) => c[0] !== 'Z').length, 3); assert.ok(near1([tri[0][1], tri[0][2]], [50, 0]));        // first corner points up
+  const star = SH.localCmds(SH.makeShape('star', 100, 100, 0, 0, { sides: 5, inner: 0.5 })); assert.equal(star.filter((c) => c[0] !== 'Z').length, 10);
+  assert.ok(Math.abs(Math.hypot(star[1][1] - 50, star[1][2] - 50) - 25) < 1e-9);                                                            // inner points sit at half the outer radius
+  const t = SH.translateShape(r, 5, -5); assert.deepEqual(t.T, [1, 0, 0, 1, 15, 15]); assert.deepEqual(r.T, [1, 0, 0, 1, 10, 20]);               // immutable
+  const sc = SH.transformShape(r, [2, 0, 0, 2, 0, 0]); assert.deepEqual(SH.shapeCmds(sc)[2], ['L', 220, 140]);
+  assert.deepEqual(SH.shapeFromDrag('rect', 100, 100, 40, 60, {}).T.slice(4), [40, 60]);                                                     // dragging up-left normalises the box
+  const sq = SH.shapeFromDrag('ellipse', 10, 10, 60, 30, { shift: true }); assert.deepEqual([sq.w, sq.h], [50, 50]);
+  const ce = SH.shapeFromDrag('rect', 100, 100, 130, 120, { alt: true }); assert.deepEqual([ce.w, ce.h, ce.T[4], ce.T[5]], [60, 40, 70, 80]);
+  assert.equal(SH.shapeFromDrag('rect', 5, 5, 5.2, 90, {}), null);
+  const line = SH.shapeFromPoints([[10, 10], [60, 40]], true); assert.equal(line.closed, false); assert.equal(line.fill, null); assert.deepEqual(SH.shapeCmds(line), [['M', 10, 10], ['L', 60, 40]]);
+  const poly = SH.shapeFromPoints([[10, 10], [60, 10], [30, 50]], true); assert.ok(poly.closed && poly.fill); assert.equal(SH.shapeCmds(poly).at(-1)[0], 'Z'); assert.equal(SH.shapeFromPoints([[1, 1]], false), null);
+  const T = SH.composeAbout(80, 60, 200, 100, 2, 0.5, 30), d = SH.decompose(T); assert.ok(near1([d.sx, d.sy, d.angle], [2, 0.5, 30], 1e-9));
+  assert.ok(near1(SH.apply(T, 40, 30), [200, 100]));                                                                                          // the local centre lands on the requested point
+  const cl = SH.cloneShape(poly); cl.pts[0][0] = 99; cl.T[4] = 99; assert.equal(poly.pts[0][0], 0); assert.equal(poly.T[4], 10);
+});
+
 // ---- smart objects
 import * as SM from '../src/smartmath.ts';
 t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {

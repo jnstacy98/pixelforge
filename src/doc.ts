@@ -4,6 +4,7 @@ import { cloneAdjustment, type AdjustmentData } from './adjust';
 import { applyAdjustmentOnto, composite, renderedCanvas } from './render';
 import { cloneFx, type LayerEffects } from './fx';
 import { cloneBlendIf, type BlendIf } from './blendif';
+import { cloneShape, type ShapeData } from './shapemath';
 import { cloneSmart, type LinkedFile, type SmartInfo } from './smartmath';
 import type { Styled } from './fxrender';
 
@@ -88,6 +89,8 @@ export class Layer {
   editMask = false;
   /** Editable text; the pixels in `canvas` are a raster of this. */
   text: TextData | null = null;
+  /** Vector shape data; the pixels in `canvas` are a render of it (painting on the layer rasterizes it). */
+  shape: ShapeData | null = null;
   /** Non-destructive adjustment applied to everything below this layer (through its mask and opacity). */
   adjustment: AdjustmentData | null = null;
   /** Layer styles (drop shadow, stroke, ...). Rendered from the layer's shape at composite time. */
@@ -169,14 +172,14 @@ export function buildTree(layers: Layer[]): LayerNode[] {
 /** An in-progress brush stroke, composited at render time so stroke opacity behaves like Photoshop. */
 export interface Stroke { layer: Layer; canvas: HTMLCanvasElement; opacity: number; erase: boolean; onMask: boolean; /** Preview is already placed where it should be: don't clip it to the selection. */ unclipped?: boolean }
 
-interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; adjustment: AdjustmentData | null; effects: LayerEffects | null; fillOpacity: number; blendIf: BlendIf | null; smart: SmartInfo | null }
+interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; shape: ShapeData | null; adjustment: AdjustmentData | null; effects: LayerEffects | null; fillOpacity: number; blendIf: BlendIf | null; smart: SmartInfo | null }
 const captureLayer = (l: Layer): LayerState => ({
-  canvas: cloneCanvas(l.canvas), mask: l.mask && cloneCanvas(l.mask), maskEnabled: l.maskEnabled, editMask: l.editMask, text: l.text && { ...l.text },
+  canvas: cloneCanvas(l.canvas), mask: l.mask && cloneCanvas(l.mask), maskEnabled: l.maskEnabled, editMask: l.editMask, text: l.text && { ...l.text }, shape: cloneShape(l.shape),
   adjustment: l.adjustment && cloneAdjustment(l.adjustment), effects: cloneFx(l.effects), fillOpacity: l.fillOpacity, blendIf: cloneBlendIf(l.blendIf), smart: cloneSmart(l.smart),
 });
 const restoreLayer = (l: Layer, s: LayerState) => {
   l.canvas = cloneCanvas(s.canvas); l.mask = s.mask && cloneCanvas(s.mask);
-  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.effects = cloneFx(s.effects); l.fillOpacity = s.fillOpacity; l.blendIf = cloneBlendIf(s.blendIf); l.smart = cloneSmart(s.smart); l.touchMask();
+  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.shape = cloneShape(s.shape); l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.effects = cloneFx(s.effects); l.fillOpacity = s.fillOpacity; l.blendIf = cloneBlendIf(s.blendIf); l.smart = cloneSmart(s.smart); l.touchMask();
 };
 
 interface Snapshot { w: number; h: number; items: { layer: Layer; state: LayerState }[] }
@@ -258,6 +261,7 @@ export class Doc {
     l.opacity = src.opacity; l.blend = src.blend; l.visible = src.visible;
     if (src.mask) { l.mask = cloneCanvas(src.mask); l.maskEnabled = src.maskEnabled; }
     if (src.text) l.text = { ...src.text };
+    if (src.shape) l.shape = cloneShape(src.shape);
     if (src.adjustment) l.adjustment = cloneAdjustment(src.adjustment);
     this.emit('structure');
     return l;
@@ -376,6 +380,7 @@ export class Doc {
       c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped; c.effects = cloneFx(e.effects); c.fillOpacity = e.fillOpacity; c.blendIf = cloneBlendIf(e.blendIf); c.smart = cloneSmart(e.smart);
       if (e.mask) { c.mask = cloneCanvas(e.mask); c.maskEnabled = e.maskEnabled; }
       if (e.text) c.text = { ...e.text };
+      if (e.shape) c.shape = cloneShape(e.shape);
       if (e.adjustment) c.adjustment = cloneAdjustment(e.adjustment);
       map.set(e, c);
     }
@@ -540,6 +545,8 @@ export class Doc {
     });
     this.emit('structure');
   }
+  /** Change a shape layer's data (and re-render it) as one undoable step. */
+  editShape(label: string, l: Layer, fn: () => void) { this.editSmart(label, l, fn); }
   setBlendIf(l: Layer, next: BlendIf | null, before: BlendIf | null = l.blendIf) {
     const a = cloneBlendIf(next), b = cloneBlendIf(before);
     l.blendIf = a;
@@ -573,7 +580,7 @@ export class Doc {
     const belowBefore = captureLayer(below);
     const prevActive = this.active;
     const merged = renderedCanvas(below);        // bake the lower layer's mask and styles first
-    below.canvas = merged; below.mask = null; below.editMask = false; below.text = null; below.effects = null; below.fillOpacity = 1; below.smart = null;
+    below.canvas = merged; below.mask = null; below.editMask = false; below.text = null; below.shape = null; below.effects = null; below.fillOpacity = 1; below.smart = null;
     const bctx = below.ctx;
     if (l.adjustment) {
       // an adjustment merged down is applied to the layer below only
@@ -644,7 +651,7 @@ export class Doc {
   /** Bake the mask into the layer's pixels and remove it. */
   applyMask(l = this.active) {
     if (!l.mask || l.adjustment) return;
-    this.layerEdit(l, 'Apply Layer Mask', () => { l.canvas = bakedCanvas(l); l.text = null; l.mask = null; l.editMask = false; l.touchMask(); });
+    this.layerEdit(l, 'Apply Layer Mask', () => { l.canvas = bakedCanvas(l); l.text = null; l.shape = null; l.mask = null; l.editMask = false; l.touchMask(); });
   }
   toggleMask(l = this.active) {
     if (!l.mask) return;
@@ -657,6 +664,14 @@ export class Doc {
     const l = this.addLayer(textLabel(t));
     l.text = { ...t };
     renderText(l.canvas, l.text);
+    this.emit('structure');
+    return l;
+  }
+  /** A new vector shape layer on top of the active layer. */
+  createShapeLayer(s: ShapeData, name: string, render: (canvas: HTMLCanvasElement, s: ShapeData) => void) {
+    const l = this.addLayer(name);
+    l.shape = cloneShape(s);
+    render(l.canvas, l.shape!);
     this.emit('structure');
     return l;
   }
@@ -710,7 +725,7 @@ export class Doc {
     for (const l of this.layers) {
       if (!l.isGroup) { const c = makeCanvas(nw, nh); draw(ctxOf(c), l.canvas); l.canvas = c; }
       if (l.mask) { const m = makeCanvas(nw, nh); draw(ctxOf(m), l.mask); l.mask = m; l.touchMask(); }
-      l.text = null;
+      l.text = null; l.shape = null;
     }
     this.width = Math.round(nw); this.height = Math.round(nh);
     this.selection = null; this.selMask = null;
@@ -762,13 +777,14 @@ export function pushPixelEdit(doc: Doc, layer: Layer, before: HTMLCanvasElement,
   if (!r) return;
   const b = ctxOf(before).getImageData(r.x, r.y, r.w, r.h);
   const a = ctxOf(get()).getImageData(r.x, r.y, r.w, r.h);
-  const rasterized = !isMask ? layer.text : null;
+  const rasterized = !isMask ? layer.text : null, rasterShape = !isMask ? layer.shape : null;
   if (rasterized) layer.text = null;
+  if (rasterShape) layer.shape = null;
   layer.touchMask();
   doc.history.push({
     label,
-    undo: () => { ctxOf(get()).putImageData(b, r.x, r.y); if (rasterized) layer.text = rasterized; layer.touchMask(); doc.emit('structure'); },
-    redo: () => { ctxOf(get()).putImageData(a, r.x, r.y); if (rasterized) layer.text = null; layer.touchMask(); doc.emit('structure'); },
+    undo: () => { ctxOf(get()).putImageData(b, r.x, r.y); if (rasterized) layer.text = rasterized; if (rasterShape) layer.shape = rasterShape; layer.touchMask(); doc.emit('structure'); },
+    redo: () => { ctxOf(get()).putImageData(a, r.x, r.y); if (rasterized) layer.text = null; if (rasterShape) layer.shape = null; layer.touchMask(); doc.emit('structure'); },
   });
   doc.emit('structure');
 }

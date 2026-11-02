@@ -25,6 +25,7 @@ import { autoLevels, editAdjustment, isAdjusting, newAdjustmentLayer, openCurves
 // ------------------------------------------------------------------ documents
 function refresh() {
   renderLayers(); renderHistory(); renderTabs(switchTo, closeDoc); renderStatus();
+  if (app.toolId === 'shape') renderOptions();
   document.title = `${app.doc.name}${app.doc.history.dirty ? ' •' : ''} — PixelForge`;
 }
 let unsubDoc: (() => void) | null = null;
@@ -163,6 +164,7 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Paste Layer Style', action: pasteStyle },
     { label: 'Clear Layer Style', action: clearStyle },
     '-',
+    ...(app.doc.active.shape ? [{ label: 'Shape Properties…', action: () => app.setTool('shape') }, { label: 'Rasterize Shape', action: () => app.doc.editShape('Rasterize Shape', app.doc.active, () => { app.doc.active.shape = null; }) }] : []),
     ...(app.doc.active.smart ? [
       { label: 'Smart Object: Edit Contents', action: () => editContents(app.doc, app.doc.active, (d) => addDoc(d)) },
       { label: 'Smart Object: Transform…', action: () => transformSmart(app.doc, app.doc.active) },
