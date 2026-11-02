@@ -1,3 +1,4 @@
+import { fromPsdRanges, isBlendIfActive, toPsdRanges } from './blendif';
 import { readPsd, writePsd, type Layer as PsdLayer, type Psd } from 'ag-psd';
 import { Doc, Layer, makeCanvas, ctxOf } from './doc';
 import { flatten } from './render';
@@ -92,6 +93,7 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
       if (c.canvas) ctxOf(canvas).drawImage(c.canvas, c.left ?? 0, c.top ?? 0);
       const l = new Layer(c.name || 'Layer', canvas);
       l.parent = parent; l.visible = !c.hidden; l.opacity = c.opacity ?? 1; l.clipped = !!c.clipping; l.fillOpacity = c.fillOpacity ?? 1;
+      l.blendIf = fromPsdRanges(c.blendingRanges);
       if (c.effects) {
         const { fx, unsupported } = fromPsdEffects(c.effects, psd.imageResources?.globalAngle !== undefined ? { angle: psd.imageResources.globalAngle, altitude: psd.imageResources.globalAltitude ?? 30 } : undefined);
         if (Object.keys(fx).length) l.effects = fx;
@@ -135,6 +137,7 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
           name: l.name, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible, clipping: l.clipped,
           ...(!l.isGroup && !l.adjustment ? { fillOpacity: l.fillOpacity } : {}),
           ...(l.effects ? { effects: toPsdEffects(l.effects) } : {}),
+          ...(isBlendIfActive(l.blendIf) ? { blendingRanges: toPsdRanges(l.blendIf) } : {}),
           ...(l.isGroup ? { children: n.children.map(toPsd), opened: !l.collapsed } : l.adjustment ? { adjustment: toPsdAdjustment(l.adjustment) } : { canvas: l.canvas }),
           blendMode: l.blend as PsdLayer['blendMode'],
           mask: l.mask ? { canvas: l.mask, left: 0, top: 0, right: doc.width, bottom: doc.height, defaultColor: 0, disabled: !l.maskEnabled } : undefined,

@@ -11,6 +11,7 @@ import { defaultAdjustment } from './adjust';
 import { defaultFx, FX_TUNE } from './fx';
 import { composite } from './render';
 import { editor } from './texttool';
+import { openBlendIf } from './blendifdialog';
 import { clearStyle, copyStyle, isStyling, openLayerStyle, pasteStyle } from './stylesdialog';
 import { contentAwareFill, isFilling } from './contentfill';
 import { ADJUSTMENT_LABELS } from './adjust';
@@ -149,6 +150,7 @@ const menus: { title: string; items: () => Item[] }[] = [
     ...(app.doc.clipStackOf(app.doc.active).length ? [{ label: 'Merge Clipping Mask', action: () => app.doc.mergeClipStack() }] : []),
     '-',
     { label: 'Layer Style…', action: () => openLayerStyle() },
+    { label: 'Blend If…', action: () => openBlendIf() },
     { label: 'Copy Layer Style', action: copyStyle },
     { label: 'Paste Layer Style', action: pasteStyle },
     { label: 'Clear Layer Style', action: clearStyle },
@@ -328,7 +330,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const { encode, importFile } = await import('./io');
   const data = await encode(app.doc, 'psd');
   const d2 = await importFile({ name: 'adj.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
-  return { layers: d2.layers.map((l) => ({ name: l.name, adj: l.adjustment, opacity: l.opacity, visible: l.visible, hasMask: !!l.mask })), notes: d2.notes };
+  return { layers: d2.layers.map((l) => ({ name: l.name, adj: l.adjustment, opacity: l.opacity, visible: l.visible, hasMask: !!l.mask, blendIf: l.blendIf })), notes: d2.notes };
 };
 (window as any).__defaultAdj = defaultAdjustment;
 (window as any).__composite = (d: Doc, ctx: CanvasRenderingContext2D) => composite(d, ctx);

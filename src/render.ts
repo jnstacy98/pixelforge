@@ -3,6 +3,7 @@ import { applyAdjustmentData, filterFor, isPixelAdjustment } from './adjust';
 import { cloneFx, hasEffects } from './fx';
 import { renderStyled, type Styled } from './fxrender';
 import { blendInto, isCustomBlend } from './blend';
+import { applyBlendIf, isBlendIfActive, type BlendIf } from './blendif';
 import { clipToSelection } from './selection';
 
 const scratches: HTMLCanvasElement[] = [];
@@ -10,6 +11,23 @@ function scratch(i: number, w: number, h: number) {
   let c = scratches[i];
   if (!c || c.width !== w || c.height !== h) c = scratches[i] = makeCanvas(w, h);
   return c;
+}
+
+/** `src` (placed at ox,oy) with its alpha scaled by the Blend If sliders, judged against what is already in `ctx`. */
+function withBlendIf(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, ox: number, oy: number, bi: BlendIf): HTMLCanvasElement {
+  const w = src.width, h = src.height, out = scratch(8, w, h), ox2 = ctxOf(out);
+  ox2.globalAlpha = 1; ox2.globalCompositeOperation = 'source-over'; ox2.filter = 'none';
+  ox2.clearRect(0, 0, w, h); ox2.drawImage(src, 0, 0);
+  const img = ox2.getImageData(0, 0, w, h);
+  const bw = ctx.canvas.width, bh = ctx.canvas.height, sx = Math.max(0, ox), sy = Math.max(0, oy), ex = Math.min(bw, ox + w), ey = Math.min(bh, oy + h);
+  const back = new Uint8ClampedArray(w * h * 4);
+  if (ex > sx && ey > sy) {
+    const b = ctx.getImageData(sx, sy, ex - sx, ey - sy);
+    for (let y = sy; y < ey; y++) back.set(b.data.subarray((y - sy) * (ex - sx) * 4, (y - sy + 1) * (ex - sx) * 4), ((y - oy) * w + (sx - ox)) * 4);
+  }
+  applyBlendIf(bi, img.data, back);
+  ox2.putImageData(img, 0, 0);
+  return out;
 }
 
 /** base + the in-progress stroke (at its opacity) drawn into dst. */
@@ -149,12 +167,13 @@ function drawNode(doc: Doc, node: LayerNode, ctx: CanvasRenderingContext2D, incl
     bx.globalCompositeOperation = 'source-over';
     src = b;
   }
+  const bi = !neutral && isBlendIfActive(layer.blendIf) ? layer.blendIf : null;
   if (hasEffects(layer.effects)) {
     // Shadows and outer glows blend with whatever is *underneath* the layer; everything else is in the layer's own buffer.
     const st = styledFor(layer, src, !!live);
     for (const u of st.under) paint(ctx, u.canvas, u.x, u.y, u.opacity * opacity, u.blend);
-    paint(ctx, st.main, st.x, st.y, opacity, blend);
-  } else paint(ctx, src, 0, 0, opacity * layer.fillOpacity, blend);
+    paint(ctx, bi ? withBlendIf(ctx, st.main, st.x, st.y, bi) : st.main, st.x, st.y, opacity, blend);
+  } else paint(ctx, bi ? withBlendIf(ctx, src, 0, 0, bi) : src, 0, 0, opacity * layer.fillOpacity, blend);
 }
 
 /** The styled render of a layer's (masked) pixels, cached until the layer, its mask or its styles change. */

@@ -1533,6 +1533,38 @@ assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Pat
 await page.keyboard.press('Control+z'); await wait();
 assert.ok((await discStats(100, 150, 8)).mean < 60); ok('undo restores the blemish');
 
+// 6q. Blend If
+const biOpen = async () => { await page.click('#lfx'); await page.click('.popup .mi:has-text("Blend If")'); await page.waitForSelector('.adjust-panel'); };
+const biSet = (c, w, i, v) => page.evaluate(([c, w, i, v]) => { const b = document.querySelector('.adjust-body'); b.querySelector('select').value = c; b.querySelector('select').onchange(); b.__bi.set(c, w, i, v); }, [c, w, i, v]);
+await page.evaluate(() => {
+  window.__blank(400, 300); const d = window.__app.doc, x = d.layers[0].ctx;
+  x.fillStyle = '#000'; x.fillRect(0, 0, 200, 300); x.fillStyle = '#fff'; x.fillRect(200, 0, 200, 300);
+  const top = d.addLayer('Top'); top.ctx.fillStyle = '#00c800'; top.ctx.fillRect(0, 0, 400, 300); d.emit('structure');
+});
+await wait();
+assert.deepEqual(await view(100, 100), [0, 200, 0]); assert.deepEqual(await view(300, 100), [0, 200, 0]); ok('Blend If scene: a solid green layer over black | white');
+await biOpen();
+await biSet('gray', 'dst', 3, 100); await biSet('gray', 'dst', 2, 100);
+assert.deepEqual(await view(100, 100), [0, 200, 0]); assert.deepEqual(await view(300, 100), [255, 255, 255]); ok('Underlying Layer slider hides the layer where the backdrop is bright (live preview)');
+await page.keyboard.press('Enter'); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Blend If');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual(await view(300, 100), [0, 200, 0]); ok('Blend If is one undo step');
+await page.keyboard.press('Control+Shift+z'); await wait();
+assert.deepEqual(await view(300, 100), [255, 255, 255]);
+const rtBi = await page.evaluate(() => window.__adjRoundtrip());
+const biL = rtBi.layers.find((l) => l.name === 'Top'); assert.deepEqual(biL.blendIf.gray.dst, [0, 0, 100, 100]); ok('PSD round-trip keeps the Blend If ranges');
+await biOpen(); await page.click('.adjust-foot button:has-text("Reset")'); await page.keyboard.press('Escape'); await wait();
+assert.deepEqual(await view(300, 100), [255, 255, 255]); ok('Cancel in the Blend If dialog leaves the layer unchanged');
+// This Layer: a layer with dark and light halves; hide its dark half
+await page.evaluate(() => {
+  const d = window.__app.doc, t = d.layers[1]; t.blendIf = null;
+  t.ctx.fillStyle = '#323232'; t.ctx.fillRect(0, 0, 200, 300); t.ctx.fillStyle = '#c8c8c8'; t.ctx.fillRect(200, 0, 200, 300); d.emit('structure');
+});
+await biOpen(); await biSet('gray', 'src', 0, 100); await biSet('gray', 'src', 1, 100);
+assert.deepEqual(await view(100, 100), [0, 0, 0]); assert.deepEqual(await view(300, 100), [200, 200, 200]); ok('This Layer slider hides the layer’s own dark tones');
+await page.keyboard.press('Enter'); await wait();
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

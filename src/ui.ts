@@ -3,6 +3,7 @@ import { BLEND_MODES, GROUP_BLEND_MODES, type Layer, type LayerNode } from './do
 import { FONTS } from './text';
 import { editAdjustment, newAdjustmentLayer } from './adjustdialog';
 import { openLayerStyle } from './stylesdialog';
+import { openBlendIf } from './blendifdialog';
 import { FX_LABELS, FX_ORDER, hasEffects } from './fx';
 import { ADJUSTMENT_LABELS, type AdjustmentType } from './adjust';
 
@@ -197,6 +198,7 @@ export function initPanels() {
   $('lfx').onclick = (e) => popup(e.currentTarget as HTMLElement, [
     ...[...FX_ORDER].reverse().map((k): [string, () => void] => [FX_LABELS[k] + '…', () => openLayerStyle(app.doc.active, k)]),
     ['Layer Style…', () => openLayerStyle()],
+    ['Blend If…', () => openBlendIf()],
   ]);
   $('lgroup').onclick = () => app.doc.groupLayers();
   $('lclip').onclick = () => app.doc.toggleClip();

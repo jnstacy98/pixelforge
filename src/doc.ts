@@ -3,6 +3,7 @@ import { renderText, textLabel, type TextData } from './text';
 import { cloneAdjustment, type AdjustmentData } from './adjust';
 import { applyAdjustmentOnto, composite, renderedCanvas } from './render';
 import { cloneFx, type LayerEffects } from './fx';
+import { cloneBlendIf, type BlendIf } from './blendif';
 import type { Styled } from './fxrender';
 
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -92,6 +93,8 @@ export class Layer {
   effects: LayerEffects | null = null;
   /** Fill opacity: scales the layer's own pixels but not its effects (Opacity scales both). */
   fillOpacity = 1;
+  /** Blend If sliders (null = off). */
+  blendIf: BlendIf | null = null;
   /** Bumped whenever the layer's pixels / mask may have changed; keys the styled-render cache. */
   rev = 0;
   styled: { key: string; styled: Styled } | null = null;
@@ -163,14 +166,14 @@ export function buildTree(layers: Layer[]): LayerNode[] {
 /** An in-progress brush stroke, composited at render time so stroke opacity behaves like Photoshop. */
 export interface Stroke { layer: Layer; canvas: HTMLCanvasElement; opacity: number; erase: boolean; onMask: boolean; /** Preview is already placed where it should be: don't clip it to the selection. */ unclipped?: boolean }
 
-interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; adjustment: AdjustmentData | null; effects: LayerEffects | null; fillOpacity: number }
+interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; adjustment: AdjustmentData | null; effects: LayerEffects | null; fillOpacity: number; blendIf: BlendIf | null }
 const captureLayer = (l: Layer): LayerState => ({
   canvas: cloneCanvas(l.canvas), mask: l.mask && cloneCanvas(l.mask), maskEnabled: l.maskEnabled, editMask: l.editMask, text: l.text && { ...l.text },
-  adjustment: l.adjustment && cloneAdjustment(l.adjustment), effects: cloneFx(l.effects), fillOpacity: l.fillOpacity,
+  adjustment: l.adjustment && cloneAdjustment(l.adjustment), effects: cloneFx(l.effects), fillOpacity: l.fillOpacity, blendIf: cloneBlendIf(l.blendIf),
 });
 const restoreLayer = (l: Layer, s: LayerState) => {
   l.canvas = cloneCanvas(s.canvas); l.mask = s.mask && cloneCanvas(s.mask);
-  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.effects = cloneFx(s.effects); l.fillOpacity = s.fillOpacity; l.touchMask();
+  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.effects = cloneFx(s.effects); l.fillOpacity = s.fillOpacity; l.blendIf = cloneBlendIf(s.blendIf); l.touchMask();
 };
 
 interface Snapshot { w: number; h: number; items: { layer: Layer; state: LayerState }[] }
@@ -244,7 +247,7 @@ export class Doc {
     if (src.isGroup) return this.duplicateGroup(src);
     const at = this.layers.indexOf(src) + 1;
     const l = this.addLayer(`${src.name} copy`, cloneCanvas(src.canvas), at);
-    l.parent = src.parent; l.clipped = src.clipped; l.effects = cloneFx(src.effects); l.fillOpacity = src.fillOpacity;
+    l.parent = src.parent; l.clipped = src.clipped; l.effects = cloneFx(src.effects); l.fillOpacity = src.fillOpacity; l.blendIf = cloneBlendIf(src.blendIf);
     l.opacity = src.opacity; l.blend = src.blend; l.visible = src.visible;
     if (src.mask) { l.mask = cloneCanvas(src.mask); l.maskEnabled = src.maskEnabled; }
     if (src.text) l.text = { ...src.text };
@@ -363,7 +366,7 @@ export class Doc {
     const block = this.blockOf(g), map = new Map<Layer, Layer>();
     for (const e of block) {
       const c = e.isGroup ? Layer.group(e.name) : new Layer(e.name, cloneCanvas(e.canvas));
-      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped; c.effects = cloneFx(e.effects); c.fillOpacity = e.fillOpacity;
+      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped; c.effects = cloneFx(e.effects); c.fillOpacity = e.fillOpacity; c.blendIf = cloneBlendIf(e.blendIf);
       if (e.mask) { c.mask = cloneCanvas(e.mask); c.maskEnabled = e.maskEnabled; }
       if (e.text) c.text = { ...e.text };
       if (e.adjustment) c.adjustment = cloneAdjustment(e.adjustment);
@@ -515,6 +518,16 @@ export class Doc {
       label: 'Layer Style',
       undo: () => { l.effects = cloneFx(b); this.emit('structure'); },
       redo: () => { l.effects = cloneFx(a); this.emit('structure'); },
+    });
+    this.emit('structure');
+  }
+  setBlendIf(l: Layer, next: BlendIf | null, before: BlendIf | null = l.blendIf) {
+    const a = cloneBlendIf(next), b = cloneBlendIf(before);
+    l.blendIf = a;
+    this.history.push({
+      label: 'Blend If',
+      undo: () => { l.blendIf = cloneBlendIf(b); this.emit('structure'); },
+      redo: () => { l.blendIf = cloneBlendIf(a); this.emit('structure'); },
     });
     this.emit('structure');
   }

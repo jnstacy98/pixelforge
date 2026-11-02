@@ -119,6 +119,35 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.equal(P.fromPsdAdjustment({ type: 'color lookup' }), null);
 });
 
+// ---- Blend If
+import * as BI from '../src/blendif.ts';
+t('Blend If range table: hidden outside, ramps over the splits, 1 between', () => {
+  const r = BI.rangeTable([50, 100, 150, 200]);
+  assert.equal(r[10], 0); assert.equal(r[230], 0); assert.equal(r[120], 1); assert.equal(r[100], 1); assert.equal(r[150], 1);
+  assert.ok(r[75] > 0.4 && r[75] < 0.6); assert.ok(r[175] > 0.4 && r[175] < 0.6);
+  const full = BI.rangeTable([0, 0, 255, 255]); for (let v = 0; v < 256; v++) assert.equal(full[v], 1);
+  assert.equal(BI.rangeTable([100, 100, 255, 255])[99], 0); assert.equal(BI.rangeTable([100, 100, 255, 255])[100], 1);
+});
+t('Blend If hides by the layer’s own gray and by the underlying colour; channels multiply', () => {
+  const bi = BI.defaultBlendIf(); bi.gray.src = [100, 100, 255, 255];
+  const s = new Uint8ClampedArray([50, 50, 50, 255, 200, 200, 200, 255]), b = new Uint8ClampedArray(8).fill(255);
+  BI.applyBlendIf(bi, s, b); assert.deepEqual([s[3], s[7]], [0, 255]);
+  const b2 = BI.defaultBlendIf(); b2.gray.dst = [0, 0, 100, 100];
+  const s2 = new Uint8ClampedArray([9, 9, 9, 255, 9, 9, 9, 255]), back2 = new Uint8ClampedArray([20, 20, 20, 255, 240, 240, 240, 255]);
+  BI.applyBlendIf(b2, s2, back2); assert.deepEqual([s2[3], s2[7]], [255, 0]);
+  const b3 = BI.defaultBlendIf(); b3.r.src = [0, 0, 100, 100]; b3.g.src = [0, 0, 100, 100];
+  const s3 = new Uint8ClampedArray([50, 50, 50, 200, 50, 150, 50, 200]); BI.applyBlendIf(b3, s3, new Uint8ClampedArray(8));
+  assert.deepEqual([s3[3], s3[7]], [200, 0]);
+  const s4 = new Uint8ClampedArray([5, 5, 5, 0]); BI.applyBlendIf(b3, s4, new Uint8ClampedArray(4)); assert.equal(s4[3], 0);   // transparent stays transparent
+});
+t('Blend If survives the PSD conversion; defaults produce no ranges', () => {
+  const bi = BI.defaultBlendIf(); bi.gray.src = [10, 40, 200, 240]; bi.b.dst = [0, 0, 128, 180];
+  assert.deepEqual(BI.fromPsdRanges(BI.toPsdRanges(bi)), bi);
+  assert.equal(BI.fromPsdRanges(BI.toPsdRanges(BI.defaultBlendIf())), null);
+  assert.equal(BI.fromPsdRanges(undefined), null);
+  assert.deepEqual(BI.normalizeRange([50, 20, 10, 5]), [50, 50, 50, 50]);
+});
+
 // ---- healing maths
 import * as H from '../src/heal.ts';
 const mkRGBA = (w, h, f) => { const a = new Uint8ClampedArray(w * h * 4); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const [r, g, b, al = 255] = f(x, y); const i = (y * w + x) * 4; a[i] = r; a[i + 1] = g; a[i + 2] = b; a[i + 3] = al; } return a; };
