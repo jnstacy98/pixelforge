@@ -1830,6 +1830,49 @@ const sq = await page.evaluate(() => window.__app.doc.layers[0].smart.placed.tra
 await page.keyboard.press('Control+z'); await wait();
 assert.equal((await a0px(65, 75))[3], 0); ok('…and undoes cleanly');
 
+// 6z2. perspective / skew / distort / warp
+const ftDrag = async (from, to) => { const a = await toScreen(...from), b = await toScreen(...to); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 6 }); await page.mouse.up(); await wait(); };
+const ftStart = async (mode) => { await ftScene(); await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active); await page.evaluate((m) => window.__xform.setMode(m), mode); await wait(); };
+const alphaAt = async (x, y) => (await a0px(x, y))[3];
+await ftStart('distort');
+assert.equal(await page.evaluate(() => document.querySelector('#options select').value), 'distort'); ok('the Free Transform options bar has a Mode menu (Scale/Rotate, Skew, Distort, Perspective, Warp)');
+await ftDrag([180, 160], [240, 200]); await page.keyboard.press('Enter'); await wait(); await page.waitForTimeout(200);
+assert.equal((await a0px(110, 110))[0], 208); assert.equal((await a0px(200, 150))[0], 208); assert.equal(await alphaAt(225, 150), 0); assert.equal(await alphaAt(150, 185), 0); assert.equal((await a0px(150, 168))[0], 208); ok('Distort: dragging a corner pulls the rectangle into a quadrilateral (edges follow the straight lines between the corners)');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Free Transform');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal((await a0px(105, 105))[0], 208); assert.equal(await alphaAt(200, 150), 0); ok('…as a single undo step');
+
+await ftStart('perspective');
+await ftDrag([100, 100], [120, 100]); await page.keyboard.press('Enter'); await wait(); await page.waitForTimeout(200);
+assert.equal(await alphaAt(105, 102), 0); assert.equal((await a0px(140, 102))[0], 208); assert.equal(await alphaAt(175, 102), 0); assert.equal((await a0px(105, 155))[0], 208); assert.equal((await a0px(175, 155))[0], 208); ok('Perspective: dragging the top-left corner inwards pulls the top-right corner in by the same amount (a trapezoid, bottom edge untouched)');
+await page.keyboard.press('Control+z'); await wait();
+
+await ftStart('skew');
+await ftDrag([140, 100], [170, 100]); await page.keyboard.press('Enter'); await wait(); await page.waitForTimeout(200);
+assert.equal(await alphaAt(105, 102), 0); assert.equal((await a0px(205, 102))[0], 208); assert.equal((await a0px(105, 155))[0], 208); assert.equal(await alphaAt(185, 155), 0); ok('Skew: dragging the top edge slides it sideways into a parallelogram');
+await page.keyboard.press('Control+z'); await wait();
+
+await ftStart('warp');
+assert.equal(await page.evaluate(() => window.__xform.grid.length), 32); ok('Warp starts as a 4×4 control lattice laid on the layer');
+await ftDrag([100 + 80 / 3, 100], [100 + 80 / 3, 70]); await ftDrag([100 + 160 / 3, 100], [100 + 160 / 3, 70]); await page.keyboard.press('Enter'); await wait(); await page.waitForTimeout(250);
+assert.equal((await a0px(140, 95))[0], 208); assert.equal(await alphaAt(140, 72), 0); assert.equal((await a0px(140, 82))[0], 208); assert.equal((await a0px(140, 130))[0], 208); ok('Warp: pulling the top control points up bulges the top edge into a curve');
+await page.keyboard.press('Control+z'); await wait();
+
+await ftStart('perspective');
+await ftDrag([100, 100], [120, 100]);
+await page.evaluate(() => window.__xform.setMode('affine')); await wait();
+assert.ok(await page.evaluate(() => window.__xform.quad === null && Math.abs(window.__xform.m.sx - 1) < 1e-9)); ok('going back to Scale / Rotate resets the free-form shape');
+await page.keyboard.press('Escape'); await wait();
+assert.equal((await a0px(105, 105))[0], 208); ok('Esc cancels a perspective edit');
+
+// smart objects refuse the free-form modes
+await ftScene();
+await page.evaluate(() => { window.__smartApi.convertToSmart(window.__app.doc, window.__app.doc.active); });
+await page.waitForFunction(() => window.__app.doc.layers[0].smart); await wait();
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+await page.evaluate(() => window.__xform.setMode('warp')); assert.equal(await page.evaluate(() => window.__xform.mode), 'affine'); ok('smart objects stay in Scale / Rotate mode (warp needs pixels)');
+await page.keyboard.press('Escape'); await wait();
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

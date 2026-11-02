@@ -139,6 +139,37 @@ t('free transform: model mapping, handle drags (anchor stays put), rotation, uni
   assert.equal(FT.rotateTo(m, 140 + 100, 130 + 30, 0, 0, true).angle % 15, 0);
 });
 
+t('perspective / distort / warp maths: homography, Bézier mesh, mesh rasteriser, corner modes', () => {
+  const near1 = (a, b, e = 1e-6) => a.every((v, i) => Math.abs(v - b[i]) < e);
+  const trap = [20, 0, 80, 0, 100, 60, 0, 60];                                         // a trapezoid (wider at the bottom)
+  const f = FT.squareToQuad(trap);
+  assert.ok(near1(f(0, 0), [20, 0]) && near1(f(1, 0), [80, 0]) && near1(f(1, 1), [100, 60]) && near1(f(0, 1), [0, 60]));
+  assert.ok(Math.abs(f(0.5, 0.5)[0] - 50) < 1e-9 && f(0.5, 0.5)[1] < 29);                    // perspective: the middle is not the arithmetic middle
+  const rect = [10, 10, 50, 10, 50, 30, 10, 30], m = FT.quadMesh(rect, 4); assert.ok(near1([m[0], m[1], m[m.length - 2], m[m.length - 1]], [10, 10, 50, 30]));
+  const bz = FT.bezierMesh(FT.latticeFromQuad(rect), 4); for (let k = 0; k < bz.length; k++) assert.ok(Math.abs(bz[k] - m[k]) < 1e-9, 'flat lattice = flat quad');
+  const pulled = FT.latticeFromQuad(rect); pulled[(1 * 4 + 1) * 2 + 1] -= 30; const bm = FT.bezierMesh(pulled, 4); assert.ok(bm[(2 * 5 + 2) * 2 + 1] < m[(2 * 5 + 2) * 2 + 1]);   // pulling a control point bends the surface
+  // rasteriser: identity placement reproduces the source; 2× scale keeps the edges crisp and the centre colour
+  const w = 6, h = 4, src = new Uint8ClampedArray(w * h * 4); for (let p = 0; p < w * h; p++) { src[p * 4] = p * 9; src[p * 4 + 1] = 100; src[p * 4 + 2] = 200 - p; src[p * 4 + 3] = 255; }
+  for (const ss of [1, 2]) {
+    const out = FT.renderMesh(src, w, h, FT.quadMesh([3, 2, 3 + w, 2, 3 + w, 2 + h, 3, 2 + h], 8), 8, 0, 0, 12, 10, ss);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const o = ((y + 2) * 12 + x + 3) * 4, s2 = (y * w + x) * 4; assert.ok(Math.abs(out[o] - src[s2]) <= (ss === 1 ? 2 : 16) && out[o + 3] === 255, `ss${ss} px ${x},${y}: ${out[o]} vs ${src[s2]} a${out[o + 3]}`); }
+    assert.equal(out[(0 * 12 + 0) * 4 + 3], 0); assert.equal(out[(9 * 12 + 11) * 4 + 3], 0);
+  }
+  const big = FT.renderMesh(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1, FT.quadMesh([2, 2, 8, 2, 8, 8, 2, 8], 4), 4, 0, 0, 10, 10, 2);
+  assert.deepEqual([...big.slice((5 * 10 + 5) * 4, (5 * 10 + 5) * 4 + 4)], [255, 0, 0, 255]); assert.equal(big[(1 * 10 + 1) * 4 + 3], 0);
+  const half = FT.renderMesh(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1, FT.quadMesh([0.5, 0.5, 3.5, 0.5, 3.5, 3.5, 0.5, 3.5], 2), 2, 0, 0, 4, 4, 2); assert.ok(half[(0 * 4 + 0) * 4 + 3] > 50 && half[(0 * 4 + 0) * 4 + 3] < 80);   // 1/4 covered corner pixel
+  // corner modes
+  const q = [0, 0, 100, 0, 100, 60, 0, 60];
+  assert.deepEqual(FT.distortCorner(q, 2, 120, 80), [0, 0, 100, 0, 120, 80, 0, 60]);
+  assert.deepEqual(FT.distortEdge(q, 'r', 10, -5), [0, 0, 110, -5, 110, 55, 0, 60]);
+  assert.deepEqual(FT.skewEdge(q, 't', 30, 99), [30, 0, 130, 0, 100, 60, 0, 60]);                                   // slides along the edge only
+  assert.deepEqual(FT.skewEdge(q, 'l', 99, 20), [0, 20, 100, 0, 100, 60, 0, 80]);
+  assert.deepEqual(FT.perspectiveCorner(q, 0, 15, 2), [15, 0, 85, 0, 100, 60, 0, 60]);                                // TL right → TR left, symmetric
+  assert.deepEqual(FT.perspectiveCorner(q, 0, 3, 12), [0, 12, 100, 0, 100, 60, 0, 48]);                               // TL down → BL up
+  assert.ok(FT.inQuad(q, 50, 30) && !FT.inQuad(q, 150, 30) && !FT.inQuad(q, 50, 70));
+  assert.deepEqual(FT.translateQuad(q, 5, -5).slice(0, 4), [5, -5, 105, -5]);
+});
+
 // ---- smart objects
 import * as SM from '../src/smartmath.ts';
 t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {

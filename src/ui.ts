@@ -150,11 +150,16 @@ export function renderOptions() {
     const w = num('W %', () => Math.abs(freeTransform.m?.sx ?? 1) * 100, (v) => freeTransform.set({ sx: Math.sign(freeTransform.m.sx || 1) * Math.max(0.01, v / 100) }));
     const h = num('H %', () => Math.abs(freeTransform.m?.sy ?? 1) * 100, (v) => freeTransform.set({ sy: Math.sign(freeTransform.m.sy || 1) * Math.max(0.01, v / 100) }));
     const a = num('Angle °', () => freeTransform.m?.angle ?? 0, (v) => freeTransform.set({ angle: v }));
-    const sync = () => { if (!freeTransform.active) return; for (const f of [w, h, a]) f.i.value = String(Math.round(f.get() * 100) / 100); };
+    const mode = document.createElement('select');
+    mode.innerHTML = '<option value="affine">Scale / Rotate</option><option value="skew">Skew</option><option value="distort">Distort</option><option value="perspective">Perspective</option><option value="warp">Warp</option>';
+    mode.value = freeTransform.mode; mode.onchange = () => freeTransform.setMode(mode.value as typeof freeTransform.mode);
+    const ml = document.createElement('label'); ml.append('Mode', mode);
+    const rs = document.createElement('button'); rs.textContent = 'Reset'; rs.onclick = () => freeTransform.reset();
+    const sync = () => { if (!freeTransform.active) return; mode.value = freeTransform.mode; for (const f of [w, h, a]) { f.i.value = String(Math.round(f.get() * 100) / 100); f.i.disabled = freeTransform.mode !== 'affine'; } };
     xformSync = sync;
     const ok = document.createElement('button'); ok.textContent = '✓ Apply'; ok.onclick = () => freeTransform.commit();
     const no = document.createElement('button'); no.textContent = '✕ Cancel'; no.onclick = () => freeTransform.cancel();
-    el.append(w.l, h.l, a.l, ok, no, hintEl('Enter applies · Esc cancels · Shift keeps proportions / snaps rotation · Alt scales from the centre'));
+    el.append(ml, w.l, h.l, a.l, rs, ok, no, hintEl('Enter applies · Esc cancels · Scale/Rotate: Shift keeps proportions / snaps rotation, Alt scales from the centre · Skew: drag edges · Distort: drag corners or edges · Perspective: drag a corner and its neighbour mirrors · Warp: drag the 16 control points'));
   } else if (t === 'quick') {
     el.append(slider('Size', () => app.quick.size, (v) => (app.quick.size = v), 4, 300, 1, (v) => v + 'px'),
       slider('Tolerance', () => app.quick.tolerance, (v) => (app.quick.tolerance = v), 0, 255));
