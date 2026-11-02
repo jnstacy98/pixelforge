@@ -1,7 +1,7 @@
 // Movable / customizable toolbars: dock the tool bar to any edge or float it, move the options bar
 // top/bottom, show/hide and reorder tools. The layout is remembered in localStorage.
 import { TOOLS, setToolbarTools } from './ui';
-import { DOCKS, clampFloat, defaultLayout, dockFromPoint, moveItem, sanitizeLayout, visibleTools, type BarLayout, type Dock } from './layoutmath';
+import { DOCKS, PANEL_IDS, clampFloat, defaultLayout, dockFromPoint, moveItem, sanitizeLayout, visibleTools, type BarLayout, type Dock } from './layoutmath';
 
 const KEY = 'pixelforge.layout';
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
@@ -25,6 +25,10 @@ export function apply() {
   } else { bar.style.left = bar.style.top = ''; }
   const opts = $('options'), oh = $('dock-' + layout.options);
   if (opts.parentElement !== oh) oh.append(opts);
+  const pan = $('panels'), ph = $('dock-' + layout.panels);
+  if (pan.parentElement !== ph) ph.append(pan);
+  pan.classList.toggle('on-left', layout.panels === 'left');
+  for (const id of layout.panelOrder) pan.append($(id)); // grip stays first, sections follow in order
   setToolbarTools(visibleTools(layout));
 }
 
@@ -36,6 +40,11 @@ export function dockToolbar(d: Dock | 'float') {
   commit();
 }
 export function setOptionsDock(d: 'top' | 'bottom') { layout.options = d; commit(); }
+export function setPanelsDock(d: 'left' | 'right') { layout.panels = d; commit(); }
+export function movePanel(id: string, before: string | null) {
+  const rest = layout.panelOrder.filter((x) => x !== id), i = before ? rest.indexOf(before) : rest.length;
+  rest.splice(i < 0 ? rest.length : i, 0, id); layout.panelOrder = rest; commit();
+}
 export function resetLayout() { layout = defaultLayout(ids); commit(); }
 export function setToolVisible(id: string, on: boolean) {
   const hidden = new Set(layout.hidden);
@@ -52,6 +61,60 @@ const hints = DOCKS.map((d) => { const h = document.createElement('div'); h.clas
 function showHints(active: Dock | null | false, only?: Dock[]) {
   hints.forEach((h) => { const d = h.dataset.dock as Dock; h.classList.toggle('show', active !== false && (!only || only.includes(d))); h.classList.toggle('hot', d === active); });
 }
+/** Drag the panel column by its grip to the left or right half; drag a panel header to reorder panels. */
+function initPanelDrag() {
+  const pan = $('panels');
+  const grip = document.createElement('div');
+  grip.className = 'pgrip'; grip.title = 'Drag to dock the panels on the left or right (right-click for a menu)';
+  pan.prepend(grip);
+  grip.onpointerdown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    const sx = e.clientX, sy = e.clientY; let moved = false, zone: Dock = layout.panels;
+    grip.classList.add('dragging');
+    grip.onpointermove = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+      moved = true; zone = ev.clientX < innerWidth / 2 ? 'left' : 'right'; showHints(zone, ['left', 'right']);
+    };
+    grip.onpointerup = grip.onpointercancel = () => {
+      grip.onpointermove = grip.onpointerup = grip.onpointercancel = null; grip.classList.remove('dragging'); showHints(false);
+      if (moved && zone !== layout.panels) setPanelsDock(zone as 'left' | 'right');
+    };
+  };
+  const menu = (e: MouseEvent) => {
+    e.preventDefault();
+    popup(e.clientX, e.clientY, [
+      { label: 'Dock Panels Left', check: layout.panels === 'left', action: () => setPanelsDock('left') },
+      { label: 'Dock Panels Right', check: layout.panels === 'right', action: () => setPanelsDock('right') }, '-',
+      { label: 'Reset Toolbars & Panels', action: resetLayout },
+    ]);
+  };
+  grip.addEventListener('contextmenu', menu);
+  // reorder: drag a panel's title bar over another panel
+  pan.addEventListener('pointerdown', (e) => {
+    const h = (e.target as HTMLElement).closest('h3'); const sec = h?.parentElement as HTMLElement | null | undefined;
+    if (!h || !sec || e.button !== 0 || !PANEL_IDS.includes(sec.id)) return;
+    const sx = e.clientX, sy = e.clientY; let moved = false, target: HTMLElement | null = null, after = false;
+    const clear = () => pan.querySelectorAll('.dz-above,.dz-below').forEach((x) => x.classList.remove('dz-above', 'dz-below'));
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+      moved = true; clear(); target = null;
+      for (const o of layout.panelOrder) {
+        if (o === sec.id) continue;
+        const r = $(o).getBoundingClientRect();
+        if (ev.clientY >= r.top && ev.clientY <= r.bottom) { target = $(o); after = ev.clientY > (r.top + r.bottom) / 2; target.classList.add(after ? 'dz-below' : 'dz-above'); }
+      }
+    };
+    const up = () => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); clear();
+      if (!moved || !target) return;
+      const order = layout.panelOrder, i = order.indexOf(target.id);
+      movePanel(sec.id, after ? order[i + 1] === sec.id ? order[i + 2] ?? null : order[i + 1] ?? null : target.id);
+    };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+  });
+}
+
 /** Drag the options bar by its grip: the top or bottom half of the window decides where it docks. */
 function initOptionsGrip() {
   const opts = $('options');
@@ -125,7 +188,7 @@ function toolbarMenu(e: MouseEvent) {
     ...DOCKS.map((k) => ({ label: 'Dock ' + k[0].toUpperCase() + k.slice(1), check: d === k, action: () => dockToolbar(k) })),
     { label: 'Floating', check: d === 'float', action: () => dockToolbar('float') }, '-',
     { label: layout.options === 'top' ? 'Move Options Bar to Bottom' : 'Move Options Bar to Top', action: () => setOptionsDock(layout.options === 'top' ? 'bottom' : 'top') },
-    { label: 'Reset Toolbars', action: resetLayout },
+    { label: 'Reset Toolbars & Panels', action: resetLayout },
   ]);
 }
 function optionsMenu(e: MouseEvent) {
@@ -135,7 +198,7 @@ function optionsMenu(e: MouseEvent) {
   popup(e.clientX, e.clientY, [
     { label: layout.options === 'top' ? 'Move Options Bar to Bottom' : 'Move Options Bar to Top', action: () => setOptionsDock(layout.options === 'top' ? 'bottom' : 'top') },
     { label: 'Customize Toolbar…', action: openCustomize },
-    { label: 'Reset Toolbars', action: resetLayout },
+    { label: 'Reset Toolbars & Panels', action: resetLayout },
   ]);
 }
 
@@ -174,7 +237,7 @@ export function openCustomize() {
 
 export function initLayout() {
   load();
-  initGrip(); initOptionsGrip();
+  initGrip(); initOptionsGrip(); initPanelDrag();
   $('toolbar').addEventListener('contextmenu', toolbarMenu);
   $('options').addEventListener('contextmenu', optionsMenu);
   addEventListener('resize', () => { if (layout.toolbar.dock === 'float') apply(); });

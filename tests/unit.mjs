@@ -936,5 +936,11 @@ t('layout: floating bars are kept inside the window', () => {
   assert.deepEqual(LM.clampFloat(-20, 900, 44, 300, 1000, 800), { x: 0, y: 500 });
 });
 
+t('layout: panel dock and order are validated and repaired', () => {
+  const l = LM.sanitizeLayout({ panels: 'left', panelOrder: ['historypanel', 'bogus'] }, LTL);
+  assert.equal(l.panels, 'left'); assert.deepEqual(l.panelOrder, ['historypanel', 'layerpanel']);
+  assert.equal(LM.sanitizeLayout({ panels: 'top' }, LTL).panels, 'right');
+});
+
 for (const [name, fn] of asyncTests) { await fn(); n++; console.log(`  ✓ ${name}`); }
 console.log(`\n${n} unit tests passed`);

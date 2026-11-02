@@ -2337,6 +2337,21 @@ assert.equal(await page.evaluate(() => document.getElementById('options').parent
 const ogUp = await page.evaluate(() => { const r = document.querySelector('#options .grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
 await page.mouse.move(ogUp.x, ogUp.y); await page.mouse.down(); await page.mouse.move(ogUp.x + 40, 100, { steps: 6 }); await page.mouse.up(); await wait();
 assert.equal(await page.evaluate(() => document.getElementById('options').parentElement.id), 'dock-top'); ok('…and dragging it back to the upper half returns it to the top');
+// movable panels
+await page.evaluate(() => window.__layout.reset());
+const panHost = () => page.evaluate(() => document.getElementById('panels').parentElement.id);
+assert.equal(await panHost(), 'dock-right'); ok('panels start docked right');
+const pg = await page.evaluate(() => { const r = document.querySelector('#panels .pgrip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+await page.mouse.move(pg.x, pg.y); await page.mouse.down(); await page.mouse.move(200, 300, { steps: 6 }); await page.mouse.up(); await wait();
+assert.equal(await panHost(), 'dock-left'); ok('dragging the panel grip to the left half docks the panels on the left');
+assert.equal(await page.evaluate(() => { const t = document.getElementById('toolbar').getBoundingClientRect(), p = document.getElementById('panels').getBoundingClientRect(); return t.right <= p.left + 1; }), true); ok('the tool bar stays outside the panels on the left edge');
+assert.ok(await page.evaluate(() => document.getElementById('layerlist').offsetHeight > 50)); ok('layers panel still lays out after moving');
+const hh = await page.evaluate(() => { const r = document.querySelector('#historypanel h3').getBoundingClientRect(), l = document.getElementById('layerpanel').getBoundingClientRect(); return { x: r.x + 40, y: r.y + 8, ty: l.top + 20 }; });
+await page.mouse.move(hh.x, hh.y); await page.mouse.down(); await page.mouse.move(hh.x, hh.ty, { steps: 6 }); await page.mouse.up(); await wait();
+assert.deepEqual(await page.evaluate(() => window.__layout.get().panelOrder), ['historypanel', 'layerpanel']); ok('dragging the History title above Layers reorders the panels');
+assert.equal(await page.evaluate(() => document.getElementById('panels').children[1].id), 'historypanel'); ok('…and the DOM follows');
+await page.evaluate(() => window.__layout.reset());
+assert.equal(await panHost(), 'dock-right'); ok('Reset puts the panels back');
 await page.evaluate(() => window.__app.setTool('brush'));
 
 // 7. open PNG via file drop path

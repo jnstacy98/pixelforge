@@ -3,7 +3,7 @@ import './style.css';
 import { app } from './state';
 import { Doc } from './doc';
 import { Viewer, isTyping } from './viewer';
-import { initLayout, openCustomize, resetLayout, getLayout, dockToolbar, setOptionsDock, setToolVisible, moveTool } from './layout';
+import { initLayout, openCustomize, resetLayout, getLayout, dockToolbar, setPanelsDock, movePanel, setOptionsDock, setToolVisible, moveTool } from './layout';
 import { initToolbar, initPanels, initStatus, renderOptions, renderLayers, renderTabs, renderStatus, renderHistory, toolKeys } from './ui';
 import { importFile, pickFiles, saveAs, OPEN_EXTS, type ExportFormat, type OpenedFile } from './io';
 import { applyFilter, clearSelection, fillSelection } from './filters';
@@ -230,7 +230,7 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Zoom Out', shortcut: 'Ctrl+-', action: () => app.view.setZoom(app.view.zoom / 1.25) },
     '-',
     { label: 'Customize Toolbar…', action: openCustomize },
-    { label: 'Reset Toolbars', action: resetLayout },
+    { label: 'Reset Toolbars & Panels', action: resetLayout },
   ] },
 ];
 
@@ -334,7 +334,7 @@ app.openDoc = addDoc;
 app.showDoc = (d) => switchTo(app.docs.indexOf(d));
 addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
 (window as any).__app = app;
-(window as any).__layout = { get: getLayout, dock: dockToolbar, options: setOptionsDock, show: setToolVisible, move: moveTool, reset: resetLayout }; // handy for debugging & tests
+(window as any).__layout = { get: getLayout, dock: dockToolbar, panels: setPanelsDock, panel: movePanel, options: setOptionsDock, show: setToolVisible, move: moveTool, reset: resetLayout }; // handy for debugging & tests
 
 // Test hooks (used by tests/e2e.mjs; harmless in production)
 (window as any).__roundtrip = async () => {
