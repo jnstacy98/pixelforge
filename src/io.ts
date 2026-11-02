@@ -16,6 +16,14 @@ export const OPEN_EXTS = ['psd', 'psb', ...IMAGE_EXTS];
 const extOf = (name: string) => name.split('.').pop()?.toLowerCase() ?? '';
 const baseName = (name: string) => name.replace(/^.*[\\/]/, '').replace(/\.[^.]+$/, '');
 
+export type UpdateStatus =
+  | { state: 'checking' | 'current' | 'busy' }
+  | { state: 'available'; version: string; notes?: string }
+  | { state: 'downloading'; percent: number }
+  | { state: 'ready'; version: string }
+  | { state: 'unsupported'; portable?: boolean; packaged?: boolean }
+  | { state: 'error'; message: string };
+
 export interface OpenedFile { name: string; path?: string; data: ArrayBuffer }
 
 declare global {
@@ -24,6 +32,12 @@ declare global {
       open(): Promise<{ name: string; path: string; data: Uint8Array }[]>;
       save(name: string, ext: string, data: Uint8Array): Promise<string | null>;
       onOpenPath?(cb: (f: { name: string; path: string; data: Uint8Array }) => void): void;
+      info?(): Promise<{ version: string; canSelfUpdate: boolean; portable: boolean; packaged: boolean; electron: string; platform: string; arch: string }>;
+      checkForUpdates?(): Promise<{ state: string }>;
+      downloadUpdate?(): Promise<void>;
+      installUpdate?(): Promise<void>;
+      openExternal?(url: string): Promise<void>;
+      onUpdateStatus?(cb: (s: UpdateStatus) => void): void;
     };
   }
 }

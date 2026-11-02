@@ -24,6 +24,7 @@ import { openBlendIf } from './blendifdialog';
 import { clearStyle, copyStyle, isStyling, openLayerStyle, pasteStyle } from './stylesdialog';
 import { contentAwareFill, isFilling } from './contentfill';
 import { ADJUSTMENT_LABELS } from './adjust';
+import { openGuide, openShortcuts, openAbout, checkForUpdates, initUpdates } from './help';
 import { autoLevels, editAdjustment, isAdjusting, newAdjustmentLayer, openCurves, openLevels } from './adjustdialog';
 
 // ------------------------------------------------------------------ documents
@@ -232,6 +233,17 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Customize Toolbar…', action: openCustomize },
     { label: 'Reset Toolbars & Panels', action: resetLayout },
   ] },
+  { title: 'Help', items: () => [
+    { label: 'User Guide', shortcut: 'F1', action: () => openGuide() },
+    { label: 'Keyboard Shortcuts', action: openShortcuts },
+    { label: 'Documentation Online', action: () => (window.native?.openExternal ? window.native.openExternal('https://github.com/jnstacy98/pixelforge#readme') : void window.open('https://github.com/jnstacy98/pixelforge#readme', '_blank', 'noopener')) },
+    '-',
+    { label: 'Check for Updates…', action: checkForUpdates },
+    { label: 'Release Notes', action: () => (window.native?.openExternal ? window.native.openExternal('https://github.com/jnstacy98/pixelforge/releases') : void window.open('https://github.com/jnstacy98/pixelforge/releases', '_blank', 'noopener')) },
+    { label: 'Report a Problem…', action: () => (window.native?.openExternal ? window.native.openExternal('https://github.com/jnstacy98/pixelforge/issues') : void window.open('https://github.com/jnstacy98/pixelforge/issues', '_blank', 'noopener')) },
+    '-',
+    { label: 'About PixelForge', action: openAbout },
+  ] },
 ];
 
 function initMenus() {
@@ -263,6 +275,7 @@ function initMenus() {
 // ------------------------------------------------------------------ shortcuts
 window.addEventListener('keydown', (e) => {
   if (isTyping(e) || isAdjusting() || isStyling() || isFilling()) return;
+  if (e.key === 'F1') { e.preventDefault(); openGuide(); return; }
   if (e.key === 'F5' && e.shiftKey) { e.preventDefault(); contentAwareFill(); return; }
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   const doc = app.doc;
@@ -326,7 +339,7 @@ loadSavedTips();
 app.view = new Viewer(document.getElementById('stage')!);
 app.view.onStatus = renderStatus;
 app.view.onTransform = () => editor.reposition();
-initToolbar(); initLayout(); initPanels(); initStatus(); initMenus();
+initToolbar(); initLayout(); initPanels(); initStatus(); initMenus(); initUpdates();
 app.on('tool', renderOptions); renderOptions();
 app.on('history', refresh);
 window.native?.onOpenPath?.((f) => openFiles([{ name: f.name, path: f.path, data: f.data.buffer.slice(f.data.byteOffset, f.data.byteOffset + f.data.byteLength) as ArrayBuffer }]));

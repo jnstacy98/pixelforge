@@ -1,0 +1,23 @@
+# Publishes a Windows installer (and portable exe) to GitHub Releases. Installed copies of PixelForge
+# find the new version through Help ▸ Check for Updates… (electron-updater reads latest.yml from the release).
+#
+#   1. bump "version" in package.json, commit
+#   2. git tag v0.2.0 && git push origin v0.2.0
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
