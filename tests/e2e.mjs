@@ -1653,6 +1653,39 @@ await page.keyboard.press('Control+z'); await wait();
 assert.deepEqual(await selAt([[250, 150]]), [true]); ok('undo restores the previous selection');
 await page.evaluate(() => window.__app.doc.setSelection(null));
 
+// 6u. custom brush tips
+await page.evaluate(() => { window.__blank(400, 300); const a = window.__app; a.fg = '#ff0000'; Object.assign(a.brush, { size: 40, hardness: 1, opacity: 1, flow: 1, spacing: 0.25, tip: 'round', angle: 0, follow: false }); a.doc.setSelection(null); a.setTool('brush'); });
+await wait();
+const dab = async (x, y) => { const q = await toScreen(x, y); await page.mouse.click(q.x, q.y); await wait(); };
+const redAt = async (x, y) => (await view(x, y))[1] < 100;
+await dab(100, 100);
+assert.equal(await redAt(100, 100), true); assert.equal(await redAt(118, 118), false); ok('round tip: the corner of the 40 px square is not painted');
+await page.evaluate(() => { window.__app.brush.tip = 'tip:square'; });
+await dab(250, 100);
+assert.equal(await redAt(250, 100), true); assert.equal(await redAt(267, 117), true); ok('built-in Square tip paints the corners');
+await page.evaluate(() => { window.__app.brush.tip = 'tip:square'; window.__app.brush.angle = 45; });
+await dab(100, 220);
+assert.equal(await redAt(100, 220), true); assert.equal(await redAt(100, 245), true); assert.equal(await redAt(118, 238), false); ok('Angle rotates the tip (a 45° square has points up/down but no corners at 18,18)');
+// define a tall tip from a layer shape
+await page.evaluate(() => {
+  window.__blank(400, 300); const a = window.__app, d = a.doc, x = d.layers[0].ctx;
+  x.fillStyle = '#fff'; x.fillRect(0, 0, 400, 300); x.fillStyle = '#000'; x.fillRect(50, 50, 10, 30); d.emit('structure');
+  d.setSelection({ x: 45, y: 45, w: 20, h: 40 }); a.fg = '#ff0000'; Object.assign(a.brush, { size: 40, hardness: 1, spacing: 0.25, tip: 'round', angle: 0, follow: false });
+});
+await page.evaluate(() => window.__defineBrushTip());
+await page.waitForSelector('.modal');
+await page.fill('.modal input[name=name]', 'Tall'); await page.click('.modal button.primary'); await page.waitForTimeout(300);
+const tipId = await page.evaluate(() => window.__app.brush.tip);
+assert.ok(tipId.startsWith('tip:user')); ok('Define Brush Tip from Selection creates and selects a user tip');
+assert.ok(await page.evaluate(() => (JSON.parse(localStorage.getItem('pixelforge.brushTips') || '[]')).some((t) => t.name === 'Tall'))); ok('…and remembers it for the next session (localStorage)');
+await page.evaluate(() => { const a = window.__app, d = a.doc; d.setSelection(null); d.layers[0].ctx.fillStyle = '#fff'; d.layers[0].ctx.fillRect(0, 0, 400, 300); d.emit('structure'); });
+await dab(250, 150);
+assert.equal(await redAt(250, 150), true); assert.equal(await redAt(250, 160), true); assert.equal(await redAt(250, 172), false); assert.equal(await redAt(262, 150), false); ok('the custom tip paints its own shape (tall, narrow), scaled to the brush size');
+// follow stroke: dragging right rotates a tall tip to lie along the path
+await page.evaluate(() => { const a = window.__app, d = a.doc; d.layers[0].ctx.fillStyle = '#fff'; d.layers[0].ctx.fillRect(0, 0, 400, 300); d.emit('structure'); a.brush.follow = true; a.brush.angle = 90; a.brush.size = 40; a.brush.spacing = 0.05; });
+{ const a = await toScreen(100, 150), b = await toScreen(300, 150); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 12 }); await page.mouse.up(); await wait(); }
+assert.equal(await redAt(200, 150), true); assert.equal(await redAt(200, 165), false); ok('Follow stroke (+90° offset) turns the tall tip to lie along a horizontal stroke: a thin line, not a 40 px band');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

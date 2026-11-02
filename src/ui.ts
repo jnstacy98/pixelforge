@@ -2,6 +2,7 @@ import { app, type ToolId } from './state';
 import { BLEND_MODES, GROUP_BLEND_MODES, type Layer, type LayerNode } from './doc';
 import { FONTS } from './text';
 import { editAdjustment, newAdjustmentLayer } from './adjustdialog';
+import { ROUND, allTips } from './brushtips';
 import { openLayerStyle } from './stylesdialog';
 import { openBlendIf } from './blendifdialog';
 import { FX_LABELS, FX_ORDER, hasEffects } from './fx';
@@ -72,6 +73,16 @@ export function renderOptions() {
       slider('Opacity', () => b.opacity, (v) => (b.opacity = v), 0.01, 1, 0.01, pct),
       slider('Flow', () => b.flow, (v) => (b.flow = v), 0.01, 1, 0.01, pct),
       slider('Spacing', () => b.spacing, (v) => (b.spacing = v), 0.02, 1, 0.01, pct));
+    const tl = document.createElement('label'), ts = document.createElement('select');
+    ts.className = 'tipsel';
+    ts.innerHTML = `<option value="${ROUND}">Round (soft)</option>` + allTips().map((x) => `<option value="${x.id}">${x.name.replace(/[<&"]/g, '')}</option>`).join('');
+    ts.value = allTips().some((x) => x.id === b.tip) ? b.tip : ROUND; ts.onchange = () => { b.tip = ts.value; renderOptions(); app.emit('options'); }; tl.append('Tip', ts);
+    el.append(tl);
+    if (b.tip !== ROUND) {
+      const fl = document.createElement('label'), fc = document.createElement('input'); fc.type = 'checkbox'; fc.checked = b.follow; fc.onchange = () => (b.follow = fc.checked); fl.append(fc, 'Follow stroke');
+      el.append(slider('Angle', () => b.angle, (v) => (b.angle = v), 0, 359, 1, (v) => v + '°'), fl,
+        hintEl('Edit ▸ Define Brush Tip from Selection makes a tip from the selected pixels'));
+    }
   } else if (t === 'spot') {
     el.append(slider('Size', () => b.size, (v) => (b.size = v), 1, 500, 1, (v) => v + 'px'),
       slider('Hardness', () => b.hardness, (v) => (b.hardness = v), 0, 1, 0.01, pct));

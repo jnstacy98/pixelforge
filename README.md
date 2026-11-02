@@ -13,7 +13,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 | **Text** | Text tool (`T`): click to type, click existing text to re-edit. Font, size, bold, italic, alignment, color (foreground). Text stays an editable layer — move it, restyle it, mask it, blend it. Painting on it or applying filters rasterizes it (undoable). |
 | **Clone Stamp** | `S`: Alt+click to set the source, then paint to copy pixels from it. Soft/hard brush tip, size, opacity, flow, spacing, pen pressure. **Aligned** (offset carries across strokes) or restart from the source each stroke. Sample **current layer**, **current & below**, or **all layers** (clone onto a new empty layer without touching the original). A live overlay shows where you're sampling from. Respects selections, works on layer masks, one undo step per stroke. |
 | **Healing** | **Healing Brush** (`J`): like the Clone Stamp (Alt+click source, aligned, sample layer / below / all), but when you release, the patch keeps the source's *texture* and takes its colour and lighting from the surroundings — blemishes vanish without a ghost or seam. **Spot Healing** (`K`): just paint over a blemish; PixelForge searches nearby areas for the one whose surroundings match best and heals from it. Seamless membrane blending (push-pull pyramid + relaxation), one undo step per stroke, works with selections. |
-| **Brush & eraser** | Size, hardness, opacity, flow, spacing; pen-pressure sensitivity; stroke-level opacity like Photoshop. `[` / `]` resize. |
+| **Brush & eraser** | Size, hardness, opacity, flow, spacing; pen-pressure sensitivity; stroke-level opacity like Photoshop. `[` / `]` resize. **Custom brush tips**: six built-in tips (square, diamond, star, chalk, splatter, bristles) plus **Edit ▸ Define Brush Tip from Selection** (black = paint, or the layer's transparency as the shape); tip angle and *Follow stroke*. User tips are remembered between sessions. Clone / eraser use the tip too. |
 | **Tools** | Move, rectangular marquee, brush, eraser, paint bucket (tolerance/contiguous), gradient, eyedropper, hand. |
 | **Selection** | Rectangle & ellipse marquee, freehand **and polygonal lasso** (press `L` again to switch; click corners, click the first point / double-click / Enter to close, Backspace removes a point, Esc cancels), **Quick Selection** (`Q`: paint over an object and the selection grows along colour edges), magic wand (tolerance, contiguous, sample all layers). **Shift** adds, **Alt** subtracts, **Shift+Alt** intersects. Select ▸ All / Deselect / Inverse (`Ctrl+Shift+I`) / Feather. Irregular selections limit brush, eraser, bucket, gradient, fills, filters and move, and can become a layer mask. Selection changes are undoable. |
 | **Image** | Image size, canvas size, rotate 90°, flip H/V. |
@@ -31,6 +31,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 ### Known limitations
 - Layers are document-sized (pixels moved off-canvas are cropped).
 - PSD: smart-object editing and layer effects are not preserved. Non-`.cube` Color Lookup tables and noise-type Gradient Maps open as hidden placeholders with a warning. Brightness/Contrast and Hue/Saturation use PixelForge's own formulas, so they look *similar* but not identical to Photoshop's. Hue/Saturation's per-colour ranges and Lightness are ignored.
+- Brush tips: tips are alpha masks only (no per-dab colour from the tip image, no scatter / jitter / texture, no `.abr` import), at most 256 px, stored in the browser's local storage rather than in documents.
 - Quick Selection: a colour-similarity flood within three brush radii of each stamp (no edge-detection or auto-enhance), so low-contrast edges may leak — lower the tolerance or the brush size.
 - Blend If: only pixel/text layers (not groups or adjustment layers); sliders are judged against the composite beneath the layer at its own stack position; merging a layer down does not bake its Blend If; Photoshop's Alt-drag half-slider UI is replaced by four separate sliders.
 - Content-Aware Move: no rotate/scale of the moved object, no "Structure"/"Color" sliders, and Extend is a blended copy rather than Photoshop's structure-adaptive stretch. The hole is filled at "Fast" quality and the move only fills from the sampled layer(s) you choose.
@@ -65,7 +66,7 @@ npm run dist:win    # Windows installer + portable exe (electron-builder)
 ```
 
 ## Roadmap
-Adjustment-layer blend modes, custom brush tips, tablet tilt, TIFF support.
+Adjustment-layer blend modes, tablet tilt, TIFF support.
 
 ## License
 MIT

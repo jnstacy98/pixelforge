@@ -119,6 +119,22 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.equal(P.fromPsdAdjustment({ type: 'color lookup' }), null);
 });
 
+// ---- Brush tips
+import * as BT from '../src/brushtips.ts';
+t('brush tips: built-ins, tip-from-pixels (darkness vs alpha), define / lookup', () => {
+  assert.ok(BT.getTip('tip:square') && BT.getTip('tip:star').w === 64); assert.equal(BT.getTip('round'), undefined); assert.equal(BT.getTip('nope'), undefined);
+  const sq = BT.getTip('tip:square'); assert.ok(sq.alpha.every((v) => v === 255));
+  const star = BT.getTip('tip:star'); assert.ok(star.alpha[32 * 64 + 32] === 255 && star.alpha[0] === 0);
+  // opaque pixels: black paints, white does not
+  const px = new Uint8ClampedArray([0, 0, 0, 255, 255, 255, 255, 255, 128, 128, 128, 255, 255, 255, 255, 255]);
+  const a = BT.tipFromPixels(px, 2, 2); assert.deepEqual([a[0], a[1], a[3]], [255, 0, 0]); assert.ok(a[2] > 100 && a[2] < 160);
+  // see-through pixels: alpha is the shape whatever the colour
+  const tr = new Uint8ClampedArray([255, 255, 255, 255, 255, 255, 255, 0, 255, 255, 255, 0, 255, 255, 255, 0]);
+  const b = BT.tipFromPixels(tr, 2, 2); assert.deepEqual([...b], [255, 0, 0, 0]);
+  assert.equal(BT.tipFromPixels(new Uint8ClampedArray(16).fill(255), 2, 2), null);          // all white: nothing to paint
+  const t = BT.defineTip('Mine', 2, 2, new Uint8ClampedArray([1, 2, 3, 4]), false); assert.equal(BT.getTip(t.id).name, 'Mine');
+});
+
 // ---- Pattern Overlay
 import * as PT from '../src/patterns.ts';
 t('pattern registry: built-ins, define, lookup; Pattern Overlay PSD round trip; stacking order matches Photoshop', () => {

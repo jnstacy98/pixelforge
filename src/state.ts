@@ -14,7 +14,7 @@ class App {
   fg = '#000000';
   bg = '#ffffff';
   toolId: ToolId = 'brush';
-  brush = { size: 24, hardness: 0.7, opacity: 1, flow: 1, spacing: 0.12 };
+  brush = { size: 24, hardness: 0.7, opacity: 1, flow: 1, spacing: 0.12, tip: 'round', angle: 0, follow: false };
   fill = { tolerance: 32, contiguous: true };
   text = { font: FONTS[0][1], size: 48, bold: false, italic: false, align: 'left' as 'left' | 'center' | 'right' };
   /** Clone Stamp: source point (Alt+click), the dest→source offset, and sampling options. */

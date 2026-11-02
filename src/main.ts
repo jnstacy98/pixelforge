@@ -12,6 +12,8 @@ import { defaultAdjustment } from './adjust';
 import { defaultFx, FX_TUNE } from './fx';
 import { composite } from './render';
 import { editor } from './texttool';
+import { defineBrushTip } from './definetip';
+import { loadSavedTips } from './brushtips';
 import { openBlendIf } from './blendifdialog';
 import { clearStyle, copyStyle, isStyling, openLayerStyle, pasteStyle } from './stylesdialog';
 import { contentAwareFill, isFilling } from './contentfill';
@@ -102,6 +104,7 @@ const menus: { title: string; items: () => Item[] }[] = [
       { label: h.canRedo ? `Redo ${h.redoLabel}` : 'Redo', shortcut: 'Ctrl+Shift+Z', action: () => h.redo() },
       '-',
       { label: 'Content-Aware Fill…', shortcut: 'Shift+F5', action: () => contentAwareFill() },
+      { label: 'Define Brush Tip from Selection…', action: defineBrushTip },
       { label: 'Fill with Foreground', shortcut: 'Alt+Backspace', action: () => fillSelection(app.fg) },
       { label: 'Fill with Background', shortcut: 'Ctrl+Backspace', action: () => fillSelection(app.bg) },
       { label: 'Clear', shortcut: 'Delete', action: clearSelection },
@@ -292,6 +295,7 @@ window.addEventListener('drop', async (e) => {
 
 // ------------------------------------------------------------------ boot
 window.addEventListener('beforeunload', (e) => { if (app.docs.some((d) => d.history.dirty)) e.preventDefault(); });
+loadSavedTips();
 app.view = new Viewer(document.getElementById('stage')!);
 app.view.onStatus = renderStatus;
 app.view.onTransform = () => editor.reposition();
@@ -363,6 +367,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const t1 = getPattern(id);
   return { had: hasPattern(id), w: t1?.w, h: t1?.h, same: !!t1 && t1.w === t0.w && t1.h === t0.h && t1.data.every((v, i) => v === t0.data[i]), notes: d2.notes, fx: d2.layers.map((l) => l.effects?.patternOverlay).find(Boolean) };
 };
+(window as any).__defineBrushTip = () => { void defineBrushTip(); };
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;
 

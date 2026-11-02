@@ -1,5 +1,6 @@
 import { app, hexToRgb, rgbToHex, paintColor, grayOf, type ToolId } from './state';
 import { TextTool } from './texttool';
+import { getTip } from './brushtips';
 import { MarqueeTool, LassoTool, WandTool, QuickSelectTool } from './selecttools';
 import { clipToSelection, selectedFlags } from './selection';
 import { floodSelect } from './flood';
@@ -27,11 +28,35 @@ export interface Tool {
 
 // ---------------------------------------------------------------- brush stamps
 const stampCache = new Map<string, HTMLCanvasElement>();
-function getStamp(size: number, hardness: number, color: string) {
-  const key = `${size}|${hardness.toFixed(2)}|${color}`;
+const tipCache = new Map<string, HTMLCanvasElement>();
+/** A custom tip as a canvas of `color` whose alpha is the tip shape. */
+function tipCanvas(tipId: string, color: string) {
+  const key = `${tipId}|${color}`, hit = tipCache.get(key), tip = getTip(tipId)!;
+  if (hit) return hit;
+  if (tipCache.size > 60) tipCache.clear();
+  const c = makeCanvas(tip.w, tip.h), x = ctxOf(c), img = x.createImageData(tip.w, tip.h), [R, G, B] = hexToRgb(color);
+  for (let p = 0; p < tip.alpha.length; p++) { img.data[p * 4] = R; img.data[p * 4 + 1] = G; img.data[p * 4 + 2] = B; img.data[p * 4 + 3] = tip.alpha[p]; }
+  x.putImageData(img, 0, 0);
+  tipCache.set(key, c);
+  return c;
+}
+function getStamp(size: number, hardness: number, color: string, tipId = 'round', angle = 0) {
+  const tip = getTip(tipId);
+  const key = `${size}|${hardness.toFixed(2)}|${color}|${tip ? tipId + '|' + angle : ''}`;
   let s = stampCache.get(key);
   if (s) return s;
   if (stampCache.size > 200) stampCache.clear();
+  if (tip) {                                          // custom tip: longest side = size, rotated about its centre
+    const long = Math.max(1, Math.ceil(size)), sc = long / Math.max(tip.w, tip.h), sw = tip.w * sc, sh = tip.h * sc;
+    const d = (angle % 360 === 0 ? long : Math.ceil(Math.hypot(sw, sh))) + 2;
+    s = makeCanvas(d, d);
+    const x = ctxOf(s);
+    x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+    x.translate(d / 2, d / 2); x.rotate((angle * Math.PI) / 180);
+    x.drawImage(tipCanvas(tipId, color), -sw / 2, -sh / 2, sw, sh);
+    stampCache.set(key, s);
+    return s;
+  }
   const d = Math.max(1, Math.ceil(size)) + 2;
   s = makeCanvas(d, d);
   const ctx = ctxOf(s);
@@ -118,7 +143,7 @@ class PaintTool implements Tool {
 
   /** A brush-tip-shaped patch of source pixels, positioned on whole pixels so cloning stays sharp. */
   private cloneStamp(p: Pt, size: number) {
-    const brush = getStamp(Math.max(1, Math.round(size)), app.brush.hardness, '#000000');
+    const brush = getStamp(Math.max(1, Math.round(size)), app.brush.hardness, '#000000', app.brush.tip, this.angleFor(0));
     const d = brush.width;
     if (!cloneBuf || cloneBuf.width !== d || cloneBuf.height !== d) cloneBuf = makeCanvas(d, d);
     const x = Math.round(p.x - d / 2), y = Math.round(p.y - d / 2), cx = ctxOf(cloneBuf);
@@ -131,14 +156,20 @@ class PaintTool implements Tool {
     return { img: cloneBuf, x, y };
   }
 
-  private dab(p: Pt, pressureOn = true) {
+  /** Tip rotation for a dab: the fixed angle, plus the stroke direction when "follow stroke" is on (quantised to 5°). */
+  private angleFor(dir: number) {
+    const b = app.brush, a = b.angle + (b.follow ? dir : 0);
+    return ((Math.round(a / 5) * 5) % 360 + 360) % 360;
+  }
+
+  private dab(p: Pt, pressureOn = true, dir = 0) {
     const b = app.brush;
     const size = b.size * (pressureOn && p.pressure > 0 && p.pressure < 1 ? Math.max(0.15, p.pressure) : 1);
     let img: HTMLCanvasElement, x: number, y: number;
     if (this.isClone) ({ img, x, y } = this.cloneStamp(p, size));
     else {
       const color = this.isSpot ? '#000000' : this.onMask ? grayOf(this.erase ? app.bg : app.fg) : this.erase ? '#000000' : app.fg;
-      img = getStamp(Math.max(1, Math.round(size)), b.hardness, color);
+      img = getStamp(Math.max(1, Math.round(size)), b.hardness, color, b.tip, this.angleFor(dir));
       x = p.x - img.width / 2; y = p.y - img.height / 2;
     }
     const ctx = ctxOf(strokeCanvas!);
@@ -217,9 +248,10 @@ class PaintTool implements Tool {
     const d = Math.hypot(dx, dy);
     if (d === 0) return;
     let pos = this.carry === 0 ? step : this.carry;
+    const dir = (Math.atan2(dy, dx) * 180) / Math.PI;
     while (pos <= d) {
       const t = pos / d;
-      this.dab({ x: this.last.x + dx * t, y: this.last.y + dy * t, pressure: this.last.pressure + (p.pressure - this.last.pressure) * t });
+      this.dab({ x: this.last.x + dx * t, y: this.last.y + dy * t, pressure: this.last.pressure + (p.pressure - this.last.pressure) * t }, true, dir);
       pos += step;
     }
     this.carry = pos - d;
