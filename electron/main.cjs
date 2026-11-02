@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
 
@@ -36,12 +36,60 @@ ipcMain.handle('save', async (_e, name, ext, data) => {
   return r.filePath;
 });
 
+// ---------------------------------------------------------------- updates (Help ▸ Check for Updates…)
+// Installed (NSIS) builds update in place from the GitHub Releases of this repo. The portable exe and dev runs can't
+// replace themselves, so they just point at the releases page.
+const REPO = 'https://github.com/jnstacy98/pixelforge';
+const portable = !!process.env.PORTABLE_EXECUTABLE_DIR;
+const canSelfUpdate = app.isPackaged && !portable;
+let updater = null, updateBusy = false;
+const sendUpdate = (s) => { if (win && !win.isDestroyed()) win.webContents.send('update-status', s); };
+
+function getUpdater() {
+  if (updater) return updater;
+  ({ autoUpdater: updater } = require('electron-updater'));
+  updater.autoDownload = false;           // always ask first
+  updater.autoInstallOnAppQuit = true;    // a downloaded update is applied when the app is next closed
+  updater.on('update-available', (i) => sendUpdate({ state: 'available', version: i.version, notes: typeof i.releaseNotes === 'string' ? i.releaseNotes : '' }));
+  updater.on('update-not-available', () => sendUpdate({ state: 'current' }));
+  updater.on('download-progress', (p) => sendUpdate({ state: 'downloading', percent: Math.round(p.percent) }));
+  updater.on('update-downloaded', (i) => sendUpdate({ state: 'ready', version: i.version }));
+  updater.on('error', (e) => { updateBusy = false; sendUpdate({ state: 'error', message: String((e && e.message) || e).split('\n')[0] }); });
+  return updater;
+}
+
+ipcMain.handle('app-info', () => ({
+  version: app.getVersion(), canSelfUpdate, portable, packaged: app.isPackaged,
+  electron: process.versions.electron, platform: process.platform, arch: process.arch,
+}));
+ipcMain.handle('update-check', async () => {
+  if (!canSelfUpdate) return { state: 'unsupported', portable, packaged: app.isPackaged };
+  if (updateBusy) return { state: 'busy' };
+  updateBusy = true;
+  try { await getUpdater().checkForUpdates(); } catch (e) { sendUpdate({ state: 'error', message: String((e && e.message) || e).split('\n')[0] }); }
+  updateBusy = false;
+  return { state: 'checking' };
+});
+ipcMain.handle('update-download', async () => {
+  if (!canSelfUpdate) return;
+  try { await getUpdater().downloadUpdate(); } catch (e) { sendUpdate({ state: 'error', message: String((e && e.message) || e).split('\n')[0] }); }
+});
+ipcMain.handle('update-install', () => { if (canSelfUpdate) getUpdater().quitAndInstall(false, true); });
+ipcMain.handle('open-external', (_e, url) => {
+  // only ever open pages of this project, never an arbitrary URL from the renderer
+  if (typeof url === 'string' && (url === REPO || url.startsWith(REPO + '/'))) return shell.openExternal(url);
+});
+
 const lock = app.requestSingleInstanceLock();
 if (!lock) app.quit();
 else {
   app.on('second-instance', async (_e, argv) => {
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); const f = fileArg(argv); if (f) win.webContents.send('open-path', await readFile(f)); }
   });
-  app.whenReady().then(createWindow);
+  app.whenReady().then(() => {
+    createWindow();
+    // quiet check shortly after launch; the user only hears about it if there is something new
+    if (canSelfUpdate) win.webContents.once('did-finish-load', () => setTimeout(() => { getUpdater().checkForUpdates().catch(() => {}); }, 8000));
+  });
   app.on('window-all-closed', () => app.quit());
 }

@@ -68,6 +68,19 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 `V` move · `M` marquee · `L` lasso (again: freehand ⇄ polygonal) · `Q` quick selection · `W` magic wand · `B` brush · `S` clone stamp · `J` healing brush · `P` patch · `K` spot healing · `E` eraser · `G` bucket · `D` gradient · `T` text · `I` eyedropper · `H` hand · `X` swap colors · `[` `]` brush size
 `Ctrl+N/O/S` new/open/save PSD · `Ctrl+Shift+S` export PNG · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo · `Ctrl+J` duplicate layer · `Ctrl+G` / `Ctrl+Shift+G` group / ungroup · `Ctrl+Alt+G` clipping mask · `Shift+F5` content-aware fill · `Ctrl+E` merge down · `Ctrl+A/D` select all/none · `Ctrl+L` levels · `Ctrl+M` curves · `Ctrl+Shift+L` auto levels · `Ctrl+I` invert · `Ctrl+0/1` fit/100% · `Space`+drag pan
 
+## Installing on Windows
+
+Download **PixelForge-Setup-x.y.z.exe** from the [Releases page](https://github.com/jnstacy98/pixelforge/releases) and run it. The wizard walks through the licence, install location (per-user by default, no admin rights needed; choose "all users" if you want), and Start Menu / Desktop shortcuts, and can launch PixelForge when it finishes. PixelForge is then registered for PSD, PNG, JPEG and WebP files. Uninstall from Windows Settings ▸ Apps. A **PixelForge-Portable-x.y.z.exe** that needs no installation is also published (it can't self-update).
+
+The installer isn't code-signed yet, so Windows SmartScreen may say "Windows protected your PC": choose **More info ▸ Run anyway**.
+
+**Help menu:** User Guide (`F1`), Keyboard Shortcuts, Documentation Online, **Check for Updates…**, Release Notes, Report a Problem, About. Installed copies also check quietly a few seconds after start-up; an update is only downloaded when you say so, and installs when you restart (or next close the app).
+
+### Publishing an update (maintainers)
+1. Bump `version` in `package.json` and commit.
+2. `git tag v0.2.0 && git push origin v0.2.0` — the *Release* workflow (`.github/workflows/release.yml`) builds on Windows and attaches the installer, portable exe and `latest.yml` to a GitHub release. (Or locally: `GH_TOKEN=… npx electron-builder --win --publish always`.)
+3. Installed copies pick it up from **Help ▸ Check for Updates…**. The release must be published (not a draft) and its tag must match the `package.json` version.
+
 ## Development
 
 ```bash
