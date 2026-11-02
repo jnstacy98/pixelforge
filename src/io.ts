@@ -111,13 +111,13 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
         if (a) {
           l.adjustment = a;
           if (!l.mask) { const m = makeCanvas(psd.width, psd.height), mx = ctxOf(m); mx.fillStyle = '#fff'; mx.fillRect(0, 0, m.width, m.height); l.mask = m; }
-          l.editMask = true; l.blend = 'normal';
+          l.editMask = true;
         } else {
           l.visible = false; l.name = `${l.name} (unsupported ${c.adjustment.type} adjustment)`;
           doc.notes.push(`"${c.name}" is a ${c.adjustment.type} adjustment layer, which PixelForge can't render yet — kept as a hidden placeholder`);
         }
       }
-      if (!c.adjustment) l.blend = (c.blendMode as string) && (c.blendMode as string) !== 'pass through' ? (c.blendMode as string) : 'normal';
+      l.blend = (c.blendMode as string) && (c.blendMode as string) !== 'pass through' ? (c.blendMode as string) : 'normal';
       doc.layers.push(l);
     }
   };

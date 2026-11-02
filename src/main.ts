@@ -337,7 +337,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const { encode, importFile } = await import('./io');
   const data = await encode(app.doc, 'psd');
   const d2 = await importFile({ name: 'adj.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
-  return { layers: d2.layers.map((l) => ({ name: l.name, adj: l.adjustment, opacity: l.opacity, visible: l.visible, hasMask: !!l.mask, blendIf: l.blendIf })), notes: d2.notes };
+  return { layers: d2.layers.map((l) => ({ name: l.name, adj: l.adjustment, opacity: l.opacity, blend: l.blend, visible: l.visible, hasMask: !!l.mask, blendIf: l.blendIf })), notes: d2.notes };
 };
 (window as any).__defaultAdj = defaultAdjustment;
 (window as any).__composite = (d: Doc, ctx: CanvasRenderingContext2D) => composite(d, ctx);

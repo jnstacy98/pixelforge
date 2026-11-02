@@ -1686,6 +1686,27 @@ await page.evaluate(() => { const a = window.__app, d = a.doc; d.layers[0].ctx.f
 { const a = await toScreen(100, 150), b = await toScreen(300, 150); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 12 }); await page.mouse.up(); await wait(); }
 assert.equal(await redAt(200, 150), true); assert.equal(await redAt(200, 165), false); ok('Follow stroke (+90° offset) turns the tall tip to lie along a horizontal stroke: a thin line, not a 40 px band');
 
+// 6v. adjustment layer blend modes
+await newGray([100, 150, 200]);
+await addAdj('Invert'); await wait();
+const setAdjBlend = (b, op = 1) => page.evaluate(([b, op]) => { const l = window.__app.doc.active; l.blend = b; l.opacity = op; window.__app.doc.emit('structure'); }, [b, op]);
+assert.equal(await page.evaluate(() => document.getElementById('lblend').disabled), false); ok('the blend-mode menu is available for adjustment layers');
+await setAdjBlend('multiply');
+const am = await view(); assert.ok(near(am, [61, 62, 43], 3), `multiply ${am}`); ok('Invert in Multiply mode multiplies the inverted colours with the layer below (100,150,200 × 155,105,55)');
+await setAdjBlend('difference');
+const ad = await view(); assert.ok(near(ad, [55, 45, 145], 3), `difference ${ad}`); ok('…Difference gives |below − adjusted|');
+await setAdjBlend('multiply', 0.5);
+const ah = await view(); assert.ok(near(ah, [80, 106, 121], 4), `half ${ah}`); ok('blend mode and opacity combine (50% Multiply)');
+await setAdjBlend('luminosity');
+const al = await view(); const lumOf = (c) => 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]; assert.ok(Math.abs(lumOf(al) - lumOf([155, 105, 55])) < 12, `luminosity ${al}`); ok('Luminosity takes the adjusted brightness but keeps the hue of the layer below');
+await setAdjBlend('multiply');
+const rtB = await page.evaluate(() => window.__adjRoundtrip());
+assert.equal(rtB.layers.find((l) => l.adj && l.adj.type === 'invert').blend, 'multiply'); ok('PSD round-trip keeps an adjustment layer’s blend mode');
+await page.evaluate(() => window.__app.doc.mergeDown()); await wait();
+assert.ok(near((await base0(10, 10)).slice(0, 3), [61, 62, 43], 3)); ok('Merge Down bakes the blended adjustment into the layer below');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(near(await view(), [61, 62, 43], 3)); ok('undo restores the adjustment layer with its blend mode');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

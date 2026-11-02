@@ -343,7 +343,7 @@ export function renderLayers() {
   const sel = $<HTMLSelectElement>('lblend'), modes = a.isGroup ? GROUP_BLEND_MODES : BLEND_MODES;
   sel.innerHTML = modes.map((m) => `<option value="${m.id}">${m.label}</option>`).join('');
   sel.value = modes.some((m) => m.id === a.blend) ? a.blend : 'normal';
-  sel.disabled = !!a.adjustment;
+  sel.disabled = false;
   const fl = $<HTMLInputElement>('lfill');
   fl.value = String(Math.round(a.fillOpacity * 100)); $('lfillv').textContent = fl.value + '%'; fl.disabled = a.isGroup || !!a.adjustment;
 }

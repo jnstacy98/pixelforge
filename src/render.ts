@@ -45,11 +45,13 @@ function withStroke(dst: HTMLCanvasElement, base: HTMLCanvasElement, s: Stroke) 
 
 /**
  * Apply an adjustment layer to whatever is already drawn on `ctx`.
- * result = lerp(below, adjusted(below), k) with k = mask * layer opacity, computed exactly in premultiplied space.
+ * result = lerp(below, blend(below, adjusted(below)), k) with k = mask * layer opacity, computed exactly in premultiplied space.
+ * The layer's blend mode (Normal by default) decides how the adjusted pixels combine with the ones below, e.g. Color or
+ * Luminosity to restrict a Curves layer to colour or tone only, or Multiply / Screen for a stronger effect.
  */
 export function applyAdjustmentOnto(ctx: CanvasRenderingContext2D, w: number, h: number, layer: Layer, alpha: HTMLCanvasElement | null) {
-  const a = layer.adjustment!;
-  if (!alpha && layer.opacity >= 1) {
+  const a = layer.adjustment!, blend = layer.blend === 'pass through' ? 'normal' : layer.blend;
+  if (!alpha && layer.opacity >= 1 && blend === 'normal') {
     // Fast path (no mask, full opacity): the result is simply the adjusted pixels, so skip the blend scaffolding.
     if (isPixelAdjustment(a)) {
       const img = ctx.getImageData(0, 0, w, h);
@@ -79,6 +81,13 @@ export function applyAdjustmentOnto(ctx: CanvasRenderingContext2D, w: number, h:
     ax.putImageData(img, 0, 0);
   } else {
     ax.filter = filterFor(a) ?? 'none'; ax.drawImage(base, 0, 0); ax.filter = 'none';
+  }
+  if (blend !== 'normal') {                                                  // combine the adjusted pixels with the ones below using the blend mode
+    const bl = scratch(9, w, h), blx = ctxOf(bl);
+    blx.globalAlpha = 1; blx.globalCompositeOperation = 'source-over'; blx.filter = 'none';
+    blx.clearRect(0, 0, w, h); blx.drawImage(base, 0, 0);
+    paint(blx, adj, 0, 0, 1, blend);
+    ax.globalCompositeOperation = 'source-over'; ax.clearRect(0, 0, w, h); ax.drawImage(bl, 0, 0);
   }
   const k = scratch(7, w, h), kx = ctxOf(k);
   kx.globalCompositeOperation = 'source-over'; kx.clearRect(0, 0, w, h);
