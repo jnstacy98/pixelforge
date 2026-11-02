@@ -1,7 +1,8 @@
 import { Doc, bakedCanvas, blendOp, buildTree, makeCanvas, ctxOf, grayToAlpha, type Layer, type LayerNode, type Stroke } from './doc';
 import { applyLUTs, filterFor, lutsFor } from './adjust';
 import { cloneFx, hasEffects } from './fx';
-import { renderStyled } from './fxrender';
+import { renderStyled, type Styled } from './fxrender';
+import { blendInto, isCustomBlend } from './blend';
 import { clipToSelection } from './selection';
 
 const scratches: HTMLCanvasElement[] = [];
@@ -90,7 +91,23 @@ function clipBuf(depth: number, w: number, h: number) {
   return c;
 }
 const resetCtx = (x: CanvasRenderingContext2D) => { x.setTransform(1, 0, 0, 1, 0, 0); x.globalAlpha = 1; x.globalCompositeOperation = 'source-over'; x.filter = 'none'; };
-const blendFor = (l: Layer): GlobalCompositeOperation => (l.isGroup && l.blend === 'pass through' ? 'source-over' : blendOp(l.blend));
+const blendIdFor = (l: Layer) => (l.isGroup && l.blend === 'pass through' ? 'normal' : l.blend);
+
+/** Draw `src` (placed at x, y) onto ctx with an opacity and a Photoshop blend mode: a native operator, or per-pixel maths for the rest. */
+export function paint(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, x: number, y: number, opacity: number, blend: string) {
+  if (opacity <= 0) return;
+  if (isCustomBlend(blend)) {
+    const cw = ctx.canvas.width, ch = ctx.canvas.height, x0 = Math.max(0, x), y0 = Math.max(0, y), x1 = Math.min(cw, x + src.width), y1 = Math.min(ch, y + src.height);
+    if (x1 <= x0 || y1 <= y0) return;
+    const back = ctx.getImageData(x0, y0, x1 - x0, y1 - y0), source = ctxOf(src).getImageData(x0 - x, y0 - y, x1 - x0, y1 - y0);
+    blendInto(back.data, source.data, blend, opacity);
+    ctx.putImageData(back, x0, y0);
+    return;
+  }
+  ctx.globalAlpha = opacity; ctx.globalCompositeOperation = blendOp(blend);
+  ctx.drawImage(src, x, y);
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+}
 
 /** The live-stroke state for a layer and its mask coverage as an alpha canvas (null = no / fully-revealing mask). */
 function maskAlphaFor(doc: Doc, layer: Layer, w: number, h: number) {
@@ -108,7 +125,7 @@ function drawNode(doc: Doc, node: LayerNode, ctx: CanvasRenderingContext2D, incl
   const { width: w, height: h } = doc, layer = node.layer;
   if ((!layer.visible && !includeHidden) || layer.hiddenForEdit) return;
   const { live, alpha } = maskAlphaFor(doc, layer, w, h);
-  const opacity = neutral ? 1 : layer.opacity, op = neutral ? 'source-over' : blendFor(layer);
+  const opacity = neutral ? 1 : layer.opacity, blend = neutral ? 'normal' : blendIdFor(layer);
   if (layer.isGroup) {
     // Pass Through groups only matter when something (opacity / a mask that hides pixels) needs them isolated.
     const passThrough = layer.blend === 'pass through' || neutral;
@@ -118,9 +135,7 @@ function drawNode(doc: Doc, node: LayerNode, ctx: CanvasRenderingContext2D, incl
     resetCtx(bx); bx.clearRect(0, 0, w, h);
     drawNodes(doc, node.children, bx, includeHidden, depth + 1);
     if (needsMask) { bx.globalCompositeOperation = 'destination-in'; bx.drawImage(alpha!, 0, 0); bx.globalCompositeOperation = 'source-over'; }
-    ctx.globalAlpha = opacity; ctx.globalCompositeOperation = op;
-    ctx.drawImage(buf, 0, 0);
-    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    paint(ctx, buf, 0, 0, opacity, blend);
     return;
   }
   if (layer.adjustment) { applyAdjustmentOnto(ctx, w, h, layer, alpha && !live?.onMask && layer.maskIsFull() ? null : alpha); return; }
@@ -136,28 +151,32 @@ function drawNode(doc: Doc, node: LayerNode, ctx: CanvasRenderingContext2D, incl
     bx.globalCompositeOperation = 'source-over';
     src = b;
   }
-  let alphaMul = 1;
-  if (hasEffects(layer.effects)) src = styledFor(layer, src, !!live);     // effects + pixels (at fill opacity) in one buffer
-  else alphaMul = layer.fillOpacity;
-  ctx.globalAlpha = opacity * alphaMul;
-  ctx.globalCompositeOperation = op;
-  ctx.drawImage(src, 0, 0);
-  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  if (hasEffects(layer.effects)) {
+    // Shadows and outer glows blend with whatever is *underneath* the layer; everything else is in the layer's own buffer.
+    const st = styledFor(layer, src, !!live);
+    for (const u of st.under) paint(ctx, u.canvas, u.x, u.y, u.opacity * opacity, u.blend);
+    paint(ctx, st.main, st.x, st.y, opacity, blend);
+  } else paint(ctx, src, 0, 0, opacity * layer.fillOpacity, blend);
 }
 
 /** The styled render of a layer's (masked) pixels, cached until the layer, its mask or its styles change. */
-function styledFor(layer: Layer, shape: HTMLCanvasElement, bypass: boolean): HTMLCanvasElement {
+function styledFor(layer: Layer, shape: HTMLCanvasElement, bypass: boolean): Styled {
   const key = `${layer.rev}|${layer.fillOpacity}|${layer.maskEnabled ? 1 : 0}|${shape.width}x${shape.height}|${JSON.stringify(layer.effects)}`;
-  if (!bypass && layer.styled?.key === key) return layer.styled.canvas;
-  const canvas = renderStyled(shape, layer.effects!, layer.fillOpacity);
-  layer.styled = bypass ? layer.styled : { key, canvas };
-  return canvas;
+  if (!bypass && layer.styled?.key === key) return layer.styled.styled;
+  const styled = renderStyled(shape, layer.effects!, layer.fillOpacity);
+  if (!bypass) layer.styled = { key, styled };
+  return styled;
 }
 
 /** A copy of the layer's pixels with its mask and layer styles baked in (used when merging). */
 export function renderedCanvas(l: Layer): HTMLCanvasElement {
   const baked = bakedCanvas(l);
-  if (hasEffects(l.effects)) return renderStyled(baked, cloneFx(l.effects)!, l.fillOpacity);
+  if (hasEffects(l.effects)) {                       // flatten the styled layer onto a transparent canvas (shadows/glows have nothing to blend with)
+    const st = renderStyled(baked, cloneFx(l.effects)!, l.fillOpacity), out = makeCanvas(baked.width, baked.height), ox = ctxOf(out);
+    for (const u of st.under) paint(ox, u.canvas, u.x, u.y, u.opacity, u.blend);
+    paint(ox, st.main, st.x, st.y, 1, 'normal');
+    return out;
+  }
   if (l.fillOpacity >= 1) return baked;
   const c = makeCanvas(baked.width, baked.height), x = ctxOf(c);
   x.globalAlpha = l.fillOpacity; x.drawImage(baked, 0, 0);
@@ -186,13 +205,9 @@ function drawClipStack(doc: Doc, base: LayerNode, clipped: LayerNode[], ctx: Can
     resetCtx(tx); tx.clearRect(0, 0, w, h);
     drawNode(doc, c, tx, includeHidden, depth + 1, true);
     tx.globalCompositeOperation = 'destination-in'; tx.drawImage(buf, 0, 0); tx.globalCompositeOperation = 'source-over';   // cut to the base's shape
-    bx.globalAlpha = L.opacity; bx.globalCompositeOperation = blendFor(L);
-    bx.drawImage(tmp, 0, 0);
-    bx.globalAlpha = 1; bx.globalCompositeOperation = 'source-over';
+    paint(bx, tmp, 0, 0, L.opacity, blendIdFor(L));
   }
-  ctx.globalAlpha = b.opacity; ctx.globalCompositeOperation = blendFor(b);
-  ctx.drawImage(buf, 0, 0);
-  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  paint(ctx, buf, 0, 0, b.opacity, blendIdFor(b));
 }
 
 function drawNodes(doc: Doc, nodes: LayerNode[], ctx: CanvasRenderingContext2D, includeHidden: boolean, depth: number) {

@@ -31,7 +31,7 @@ export function openLayerStyle(layer: Layer = app.doc.active, focus?: FxKind) {
   const before = cloneFx(layer.effects);
   // a draft for every kind; absent ones start disabled with defaults
   const draft: { [K in FxKind]: NonNullable<LayerEffects[K]> } = {} as never;
-  for (const k of LIST) { const d = defaultFx(k); (draft as Record<string, unknown>)[k] = { ...d, on: false, ...((before?.[k] as object) ?? {}) }; }
+  for (const k of LIST) { const d = defaultFx(k); (draft as Record<string, unknown>)[k] = { ...d, on: false, ...(k === 'gradientOverlay' ? { style: 'linear', scale: 1 } : {}), ...((before?.[k] as object) ?? {}) }; }
   if (focus) (draft[focus] as { on: boolean }).on = true;
   let current: FxKind = focus ?? LIST.find((k) => draft[k].on) ?? 'dropShadow';
 
@@ -79,7 +79,15 @@ export function openLayerStyle(layer: Layer = app.doc.active, focus?: FxKind) {
     colorOverlay: (d: Record<string, unknown>) => [...common(d), row('Color', ...color(d, 'color'))] as never,
     gradientOverlay: (d: Record<string, unknown>) => {
       const rev = el('input', { type: 'checkbox', checked: !!d.reverse }); rev.onchange = () => { d.reverse = rev.checked; changed(); };
-      return [...common(d), row('From', ...color(d, 'color1')), row('To', ...color(d, 'color2')), row('Angle °', ...range(d, 'angle', 0, 360)), row('Reverse', rev)] as never;
+      const custom = Array.isArray(d.stops) && d.stops.length > 2, resetStops = () => { delete d.stops; };
+      const col = (key: string) => { const c = el('input', { type: 'color', value: d[key] as string }); c.oninput = () => { d[key] = c.value; resetStops(); changed(); }; return [c]; };
+      return [...common(d), ...(custom ? [row('Gradient', el('span', { textContent: `Custom, ${(d.stops as unknown[]).length} stops`, class: 'lbl' } as never))] : []),
+        row('From', ...col('color1')), row('To', ...col('color2')), row('Style', ...choice(d, 'style', [['linear', 'Linear'], ['radial', 'Radial'], ['angle', 'Angle'], ['reflected', 'Reflected'], ['diamond', 'Diamond (as radial)']])),
+        row('Angle °', ...range(d, 'angle', 0, 360)), row('Scale %', ...range(d, 'scale', 0.1, 3, 0.01, 100)), row('Reverse', rev)] as never;
+    },
+    satin: (d: Record<string, unknown>) => {
+      const inv = el('input', { type: 'checkbox', checked: !!d.invert }); inv.onchange = () => { d.invert = inv.checked; changed(); };
+      return [...common(d), row('Color', ...color(d, 'color')), row('Angle °', ...range(d, 'angle', 0, 360)), row('Distance', ...range(d, 'distance', 0, 60)), row('Size', ...range(d, 'size', 0, 60)), row('Invert', inv)] as never;
     },
     bevel: (d: Record<string, unknown>) => [
       row('Style', ...choice(d, 'style', [['inner', 'Inner Bevel'], ['outer', 'Outer Bevel'], ['emboss', 'Emboss'], ['pillow', 'Pillow Emboss'], ['stroke', 'Stroke Emboss']])),

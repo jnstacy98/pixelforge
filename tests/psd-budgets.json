@@ -1,0 +1,52 @@
+{
+ "read-write__adjustments.psd": {
+  "maxMAE": 8.48,
+  "note": "uses adjustment types that are not rendered yet (see notes)"
+ },
+ "read-write__effects.psd": {
+  "maxMAE": 5.74
+ },
+ "read-write__masks.psd": {
+  "maxMAE": 2.6
+ },
+ "read-write__stroke.psd": {
+  "skip": "this fixture's embedded preview is blank (it was written by ag-psd's test generator), so there is nothing to compare against"
+ },
+ "read-write__text-box.psd": {
+  "maxMAE": 0.3
+ },
+ "read-write__text.psd": {
+  "maxMAE": 0.3
+ },
+ "read__blend-mode.psd": {
+  "maxMAE": 1.94
+ },
+ "read__cmyk.psd": {
+  "maxMAE": 1.65
+ },
+ "read__effects.psd": {
+  "maxMAE": 5.34
+ },
+ "read__fill-opacity.psd": {
+  "maxMAE": 25.4,
+  "note": "Photoshop's Fill opacity on Linear Light-type modes behaves differently from Opacity; this single-pixel file exposes it"
+ },
+ "read__gradient-overlay.psd": {
+  "maxMAE": 5.32
+ },
+ "read__grayscale.psd": {
+  "maxMAE": 0.3
+ },
+ "read__groups.psd": {
+  "maxMAE": 0.33
+ },
+ "read__layer-mask.psd": {
+  "maxMAE": 0.3
+ },
+ "read__layers.psd": {
+  "maxMAE": 0.3
+ },
+ "read__smart-object.psd": {
+  "maxMAE": 0.3
+ }
+}

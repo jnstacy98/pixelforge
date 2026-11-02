@@ -6,7 +6,13 @@ export interface ShadowFx { on: boolean; color: string; opacity: number; blend: 
 export interface GlowFx { on: boolean; color: string; opacity: number; blend: string; spread: number; size: number }
 export interface StrokeFx { on: boolean; color: string; opacity: number; blend: string; size: number; position: 'outside' | 'inside' | 'center' }
 export interface OverlayFx { on: boolean; color: string; opacity: number; blend: string }
-export interface GradientFx { on: boolean; color1: string; color2: string; opacity: number; blend: string; angle: number; reverse: boolean }
+export interface GradientStop { at: number; color: string; alpha: number }
+/** `color1`→`color2` is the simple two-colour gradient; `stops` (when present) overrides it with a full multi-stop / per-stop-opacity gradient. */
+export interface GradientFx {
+  on: boolean; color1: string; color2: string; opacity: number; blend: string; angle: number; reverse: boolean;
+  style?: 'linear' | 'radial' | 'angle' | 'reflected' | 'diamond'; scale?: number; stops?: GradientStop[];
+}
+export interface SatinFx { on: boolean; color: string; opacity: number; blend: string; angle: number; distance: number; size: number; invert: boolean }
 export interface BevelFx {
   on: boolean;
   style: 'inner' | 'outer' | 'emboss' | 'pillow' | 'stroke';
@@ -20,15 +26,15 @@ export interface BevelFx {
 export interface LayerEffects {
   bevel?: BevelFx;
   dropShadow?: ShadowFx; innerShadow?: ShadowFx; outerGlow?: GlowFx; innerGlow?: GlowFx;
-  colorOverlay?: OverlayFx; gradientOverlay?: GradientFx; stroke?: StrokeFx;
+  colorOverlay?: OverlayFx; gradientOverlay?: GradientFx; satin?: SatinFx; stroke?: StrokeFx;
 }
 export type FxKind = keyof LayerEffects;
 /** Stacking order, bottom → top, exactly as Photoshop composites them. */
-export const FX_ORDER: FxKind[] = ['dropShadow', 'outerGlow', 'colorOverlay', 'gradientOverlay', 'innerGlow', 'innerShadow', 'bevel', 'stroke'];
+export const FX_ORDER: FxKind[] = ['dropShadow', 'outerGlow', 'colorOverlay', 'gradientOverlay', 'satin', 'innerGlow', 'innerShadow', 'bevel', 'stroke'];
 /** Order shown in the Layer Style dialog (Photoshop lists them top-most first). */
 export const FX_LABELS: Record<FxKind, string> = {
   stroke: 'Stroke', bevel: 'Bevel & Emboss', innerShadow: 'Inner Shadow', innerGlow: 'Inner Glow', colorOverlay: 'Color Overlay',
-  gradientOverlay: 'Gradient Overlay', outerGlow: 'Outer Glow', dropShadow: 'Drop Shadow',
+  gradientOverlay: 'Gradient Overlay', satin: 'Satin', outerGlow: 'Outer Glow', dropShadow: 'Drop Shadow',
 };
 
 export function defaultFx<K extends FxKind>(kind: K): NonNullable<LayerEffects[K]> {
@@ -39,6 +45,7 @@ export function defaultFx<K extends FxKind>(kind: K): NonNullable<LayerEffects[K
     innerGlow: { on: true, color: '#ffffbe', opacity: 0.75, blend: 'screen', spread: 0, size: 5 },
     colorOverlay: { on: true, color: '#ff0000', opacity: 1, blend: 'normal' },
     gradientOverlay: { on: true, color1: '#000000', color2: '#ffffff', opacity: 1, blend: 'normal', angle: 90, reverse: false },
+    satin: { on: true, color: '#000000', opacity: 0.5, blend: 'multiply', angle: 19, distance: 11, size: 14, invert: true },
     stroke: { on: true, color: '#ff0000', opacity: 1, blend: 'normal', size: 3, position: 'outside' },
     bevel: { on: true, style: 'inner', technique: 'smooth', depth: 100, direction: 'up', size: 5, soften: 0, angle: 120, altitude: 30, hiColor: '#ffffff', hiBlend: 'screen', hiOpacity: 0.75, shColor: '#000000', shBlend: 'multiply', shOpacity: 0.75 },
   };
@@ -116,19 +123,25 @@ export function ringCoverage(cov: Float32Array, w: number, h: number, size: numb
 }
 
 /**
- * Photoshop-style shadow/glow profile: fully opaque at the shape's edge (or `spread`% of `size` beyond it) fading to ~0 at
- * `size` px. Implemented as: grow the shape by `grow`, then Gaussian-blur by `sigma` (1-Φ gives that profile).
+ * Calibration of the soft edge of shadows and glows against real Photoshop output (see tests/real-psd.mjs):
+ * the blur's σ and an outward bias (both as a fraction of `size`), separately for shadows and glows.
  */
-export function softEdge(size: number, spread: number) {
-  const s = Math.min(1, Math.max(0, spread / 100)), solid = size * s, trans = size * (1 - s);
-  return { grow: solid + trans / 2, sigma: trans / 4 };
+export const FX_TUNE = { shadow: { sigmaK: 0.4, growK: 0 }, glow: { sigmaK: 1 / 3, growK: 0.3 } };
+
+/**
+ * Shadow/glow edge profile: the shape is grown by `grow`, then Gaussian-blurred by `sigma`. `spread` (0-100 %) makes the
+ * core opaque further out and the blur correspondingly narrower, like Photoshop's Spread / Choke.
+ */
+export function softEdge(size: number, spread: number, kind: 'shadow' | 'glow' = 'shadow') {
+  const s = Math.min(0.99, Math.max(0, spread / 100)), k = FX_TUNE[kind];
+  return { grow: size * (s + k.growK), sigma: k.sigmaK * size * (1 - s) };
 }
 
 /** Shadow offset for a light angle (degrees, Photoshop convention: 120° puts the shadow down-right). */
 export const shadowOffset = (angle: number, distance: number) => ({ dx: -Math.cos((angle * Math.PI) / 180) * distance, dy: Math.sin((angle * Math.PI) / 180) * distance });
 /** Start/end of a linear gradient across a w×h box at `angle` (90° = bottom → top, like Photoshop). */
-export function gradientEnds(x: number, y: number, w: number, h: number, angle: number) {
-  const a = (angle * Math.PI) / 180, dx = Math.cos(a), dy = -Math.sin(a), half = (Math.abs(w * dx) + Math.abs(h * dy)) / 2, cx = x + w / 2, cy = y + h / 2;
+export function gradientEnds(x: number, y: number, w: number, h: number, angle: number, scale = 1) {
+  const a = (angle * Math.PI) / 180, dx = Math.cos(a), dy = -Math.sin(a), half = ((Math.abs(w * dx) + Math.abs(h * dy)) / 2) * scale, cx = x + w / 2, cy = y + h / 2;
   return { x0: cx - dx * half, y0: cy - dy * half, x1: cx + dx * half, y1: cy + dy * half };
 }
 
@@ -223,7 +236,7 @@ const px = (v: number) => ({ units: 'Pixels' as const, value: v });
 /** ag-psd's writer only accepts length units for choke/spread; Photoshop's own files use percent (we read any unit). */
 const choke = (v: number) => (v > 0 ? { choke: { units: 'Pixels' as const, value: v } } : {});
 const val = (u: { value?: number } | undefined, d: number) => (typeof u?.value === 'number' ? u.value : d);
-const BLENDS = new Set(['normal', 'darken', 'multiply', 'color burn', 'lighten', 'screen', 'color dodge', 'linear dodge', 'overlay', 'soft light', 'hard light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity']);
+const BLENDS = new Set(['normal', 'darken', 'multiply', 'color burn', 'lighten', 'screen', 'color dodge', 'linear dodge', 'overlay', 'soft light', 'hard light', 'difference', 'exclusion', 'hue', 'saturation', 'color', 'luminosity', 'linear burn', 'darker color', 'lighter color', 'vivid light', 'linear light', 'pin light', 'hard mix', 'subtract', 'divide', 'dissolve']);
 const blendIn = (b: string | undefined, d: string) => (b && BLENDS.has(b) ? b : b ? 'normal' : d);
 
 const BEVEL_STYLE_OUT = { inner: 'inner bevel', outer: 'outer bevel', emboss: 'emboss', pillow: 'pillow emboss', stroke: 'stroke emboss' } as const;
@@ -240,28 +253,34 @@ export function toPsdEffects(e: LayerEffects): LayerEffectsInfo {
   if (e.colorOverlay) out.solidFill = [{ present: true, showInDialog: true, enabled: e.colorOverlay.on, blendMode: e.colorOverlay.blend as never, color: toColor(e.colorOverlay.color), opacity: e.colorOverlay.opacity }];
   if (e.bevel) {
     const v = e.bevel;
-    out.bevel = { present: true, showInDialog: true, enabled: v.on, size: px(v.size), angle: v.angle, strength: v.depth, highlightBlendMode: v.hiBlend as never, shadowBlendMode: v.shBlend as never,
+    out.bevel = { present: true, showInDialog: true, enabled: v.on, size: px(v.size), angle: v.angle, strength: v.depth / 100, highlightBlendMode: v.hiBlend as never, shadowBlendMode: v.shBlend as never,
       highlightColor: toColor(v.hiColor), shadowColor: toColor(v.shColor), style: BEVEL_STYLE_OUT[v.style], highlightOpacity: v.hiOpacity, shadowOpacity: v.shOpacity, soften: px(v.soften), useGlobalLight: false,
       altitude: v.altitude, technique: BEVEL_TECH_OUT[v.technique], direction: v.direction, antialiased: true };
   }
   if (e.stroke) out.stroke = [{ present: true, showInDialog: true, enabled: e.stroke.on, size: px(e.stroke.size), position: e.stroke.position, fillType: 'color', blendMode: e.stroke.blend as never, opacity: e.stroke.opacity, color: toColor(e.stroke.color) }];
   if (e.gradientOverlay) {
-    const g = e.gradientOverlay;
+    const g = e.gradientOverlay, stops = g.stops ?? [{ at: 0, color: g.color1, alpha: 1 }, { at: 1, color: g.color2, alpha: 1 }];
     out.gradientOverlay = [{
-      present: true, showInDialog: true, enabled: g.on, blendMode: g.blend, opacity: g.opacity, angle: g.angle, reverse: g.reverse, scale: 1, type: 'linear', align: true,
-      gradient: { name: 'Custom', type: 'solid', smoothness: 1, colorStops: [{ color: toColor(g.color1), location: 0, midpoint: 0.5 }, { color: toColor(g.color2), location: 1, midpoint: 0.5 }], opacityStops: [{ opacity: 1, location: 0, midpoint: 0.5 }, { opacity: 1, location: 1, midpoint: 0.5 }] },
+      present: true, showInDialog: true, enabled: g.on, blendMode: g.blend, opacity: g.opacity, angle: g.angle, reverse: g.reverse, scale: g.scale ?? 1, type: g.style ?? 'linear', align: true,
+      gradient: { name: 'Custom', type: 'solid', smoothness: 1, colorStops: stops.map((s) => ({ color: toColor(s.color), location: s.at, midpoint: 0.5 })), opacityStops: stops.map((s) => ({ opacity: s.alpha, location: s.at, midpoint: 0.5 })) },
     }];
+  }
+  if (e.satin) {
+    const s = e.satin;
+    out.satin = { present: true, showInDialog: true, enabled: s.on, size: px(s.size), blendMode: s.blend as never, color: toColor(s.color), antialiased: true, opacity: s.opacity, distance: px(s.distance), angle: s.angle, invert: s.invert };
   }
   return out;
 }
 
 /** Convert PSD effects. `unsupported` lists effect types that were dropped (bevel, satin, pattern overlay, non-linear gradients...). */
-export function fromPsdEffects(e: LayerEffectsInfo): { fx: LayerEffects; unsupported: string[] } {
+export function fromPsdEffects(e: LayerEffectsInfo, globalLight?: { angle: number; altitude: number }): { fx: LayerEffects; unsupported: string[] } {
   const fx: LayerEffects = {}, unsupported: string[] = [];
+  /** An effect flagged "use global light" follows the document's light angle, not the angle stored with the effect. */
+  const ang = (own: number | undefined, glob: boolean | undefined, d: number) => (glob && globalLight ? globalLight.angle : own ?? d);
   const dis = !!e.disabled;
   const shadow = (s: NonNullable<LayerEffectsInfo['dropShadow']>[number], k: 'dropShadow' | 'innerShadow') => {
     const d = defaultFx(k);
-    return { ...d, on: !dis && s.enabled !== false, color: s.color ? fromColor(s.color) : d.color, opacity: s.opacity ?? d.opacity, blend: blendIn(s.blendMode, d.blend), angle: s.angle ?? d.angle, distance: val(s.distance, d.distance), spread: val(s.choke, 0), size: val(s.size, d.size) };
+    return { ...d, on: !dis && s.enabled !== false, color: s.color ? fromColor(s.color) : d.color, opacity: s.opacity ?? d.opacity, blend: blendIn(s.blendMode, d.blend), angle: ang(s.angle, s.useGlobalLight, d.angle), distance: val(s.distance, d.distance), spread: val(s.choke, 0), size: val(s.size, d.size) };
   };
   const glow = (g: NonNullable<LayerEffectsInfo['outerGlow']>, k: 'outerGlow' | 'innerGlow') => {
     const d = defaultFx(k);
@@ -281,22 +300,35 @@ export function fromPsdEffects(e: LayerEffectsInfo): { fx: LayerEffects; unsuppo
   }
   const go = e.gradientOverlay?.[0];
   if (go) {
-    const stops = go.gradient && go.gradient.type === 'solid' ? go.gradient.colorStops : null;
-    if (stops && stops.length >= 2) {
-      if (go.type && go.type !== 'linear') unsupported.push(`${go.type} gradient overlay (drawn as linear)`);
-      fx.gradientOverlay = { on: !dis && go.enabled !== false, color1: fromColor(stops[0].color), color2: fromColor(stops[stops.length - 1].color), opacity: go.opacity ?? 1, blend: blendIn(go.blendMode, 'normal'), angle: go.angle ?? 90, reverse: !!go.reverse };
-    } else unsupported.push('gradient overlay');
+    const gr = go.gradient;
+    if (gr && gr.type === 'solid' && gr.colorStops.length >= 2) {
+      const cs = [...gr.colorStops].sort((p, q) => p.location - q.location), os = [...(gr.opacityStops ?? [])].sort((p, q) => p.location - q.location);
+      const lerp = (at: number, pts: { l: number; v: number }[], d: number) => { if (!pts.length) return d; if (at <= pts[0].l) return pts[0].v; for (let i = 1; i < pts.length; i++) if (at <= pts[i].l) { const t = (at - pts[i - 1].l) / Math.max(1e-6, pts[i].l - pts[i - 1].l); return pts[i - 1].v + (pts[i].v - pts[i - 1].v) * t; } return pts[pts.length - 1].v; };
+      const colorAt = (at: number) => { const rgb = cs.map((c) => ({ l: c.location, c: hexToRgb(fromColor(c.color)) })); const ch = (k: number) => lerp(at, rgb.map((r) => ({ l: r.l, v: r.c[k] })), 0); return rgbToHex(ch(0), ch(1), ch(2)); };
+      const oPts = os.map((o) => ({ l: o.location, v: o.opacity }));
+      const at = [...new Set([...cs.map((c) => c.location), ...os.map((o) => o.location)])].sort((p, q) => p - q);
+      const stops = at.map((l) => ({ at: l, color: colorAt(l), alpha: lerp(l, oPts, 1) }));
+      const simple = stops.length === 2 && stops[0].at === 0 && stops[1].at === 1 && stops.every((s) => s.alpha === 1);
+      const style = (go.type ?? 'linear') as NonNullable<GradientFx['style']>;
+      if (style === 'diamond') unsupported.push('diamond gradient overlay (drawn as radial)');
+      fx.gradientOverlay = { on: !dis && go.enabled !== false, color1: stops[0].color, color2: stops[stops.length - 1].color, opacity: go.opacity ?? 1, blend: blendIn(go.blendMode, 'normal'), angle: go.angle ?? 90, reverse: !!go.reverse,
+        ...(style !== 'linear' ? { style } : {}), ...(go.scale !== undefined && Math.abs(go.scale - 1) > 1e-6 ? { scale: go.scale } : {}), ...(simple ? {} : { stops }) };
+    } else unsupported.push(gr?.type === 'noise' ? 'noise gradient overlay' : 'gradient overlay');
+  }
+  const sa = e.satin;
+  if (sa) {
+    const d = defaultFx('satin');
+    fx.satin = { ...d, on: !dis && sa.enabled !== false, color: sa.color ? fromColor(sa.color) : d.color, opacity: sa.opacity ?? d.opacity, blend: blendIn(sa.blendMode, d.blend), angle: sa.angle ?? d.angle, distance: val(sa.distance, d.distance), size: val(sa.size, d.size), invert: sa.invert ?? d.invert };
   }
   if (e.bevel) {
     const v = e.bevel, d = defaultFx('bevel');
     fx.bevel = { ...d, on: !dis && v.enabled !== false, style: (invert(BEVEL_STYLE_OUT)[v.style ?? 'inner bevel'] ?? 'inner') as BevelFx['style'], technique: (invert(BEVEL_TECH_OUT)[v.technique ?? 'smooth'] ?? 'smooth') as BevelFx['technique'],
-      depth: v.strength ?? d.depth, direction: v.direction === 'down' ? 'down' : 'up', size: val(v.size, d.size), soften: val(v.soften, 0), angle: v.angle ?? d.angle, altitude: v.altitude ?? d.altitude,
+      depth: v.strength !== undefined ? Math.round(v.strength * 100) : d.depth, direction: v.direction === 'down' ? 'down' : 'up', size: val(v.size, d.size), soften: val(v.soften, 0), angle: ang(v.angle, v.useGlobalLight, d.angle), altitude: v.useGlobalLight && globalLight ? globalLight.altitude : v.altitude ?? d.altitude,
       hiColor: v.highlightColor ? fromColor(v.highlightColor) : d.hiColor, hiBlend: blendIn(v.highlightBlendMode, d.hiBlend), hiOpacity: v.highlightOpacity ?? d.hiOpacity,
       shColor: v.shadowColor ? fromColor(v.shadowColor) : d.shColor, shBlend: blendIn(v.shadowBlendMode, d.shBlend), shOpacity: v.shadowOpacity ?? d.shOpacity };
     if (v.useTexture) unsupported.push('bevel texture');
     if (v.contour && v.contour.name && !/linear/i.test(v.contour.name)) unsupported.push('bevel gloss contour');
   }
-  if (e.satin?.enabled !== false && e.satin) unsupported.push('satin');
   if (e.patternOverlay?.enabled !== false && e.patternOverlay) unsupported.push('pattern overlay');
   return { fx, unsupported };
 }

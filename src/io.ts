@@ -93,7 +93,7 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
       const l = new Layer(c.name || 'Layer', canvas);
       l.parent = parent; l.visible = !c.hidden; l.opacity = c.opacity ?? 1; l.clipped = !!c.clipping; l.fillOpacity = c.fillOpacity ?? 1;
       if (c.effects) {
-        const { fx, unsupported } = fromPsdEffects(c.effects);
+        const { fx, unsupported } = fromPsdEffects(c.effects, psd.imageResources?.globalAngle !== undefined ? { angle: psd.imageResources.globalAngle, altitude: psd.imageResources.globalAltitude ?? 30 } : undefined);
         if (Object.keys(fx).length) l.effects = fx;
         if (unsupported.length) doc.notes.push(`"${l.name}": ${[...new Set(unsupported)].join(', ')} not supported (skipped)`);
       }

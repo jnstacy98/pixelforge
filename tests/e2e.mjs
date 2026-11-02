@@ -938,7 +938,7 @@ assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Lay
 // soft shadow profile: opaque at the edge, fading to nothing by `size`
 await gx(`${G.byName('Box')}.effects.dropShadow.size = 12; ${G.byName('Box')}.effects.dropShadow.distance = 0; d.emit('structure')`);
 const sA = dark(await cpx(150, 201)), sB = dark(await cpx(150, 206)), sC = dark(await cpx(150, 211)), sD = dark(await cpx(150, 216));
-assert.ok(sA > 200 && sA > sB && sB > sC && sC > sD && sD < 12, `profile ${sA} ${sB} ${sC} ${sD}`); ok(`soft shadow fades smoothly from the edge to nothing (${sA} → ${sB} → ${sC} → ${sD})`);
+assert.ok(sA > 60 && sA < 170 && sA > sB && sB > sC && sC >= sD && sD < 12, `profile ${sA} ${sB} ${sC} ${sD}`); ok(`soft shadow is about half strength at the edge and fades smoothly to nothing, like Photoshop's (${sA} → ${sB} → ${sC} → ${sD})`);
 
 // fill opacity 0: the pixels vanish, effects stay, and the shadow is knocked out under the layer
 await gx(`${G.byName('Box')}.effects.dropShadow.size = 0; ${G.byName('Box')}.effects.dropShadow.distance = 20; d.setProp(${G.byName('Box')}, 'fillOpacity', 0)`);
@@ -1346,6 +1346,70 @@ const bperf = await page.evaluate(() => {
   return { first: t(), second: t() };
 });
 assert.ok(bperf.first < 3500 && bperf.second < bperf.first, JSON.stringify(bperf)); ok(`bevel on a 12 MP canvas: first render ${bperf.first} ms, cached ${bperf.second} ms`);
+
+
+// 6o. lessons from real Photoshop files: backdrop-aware effects, extra blend modes, gradient styles, satin
+const rgbOf = (x, y) => cpx(x, y);
+const fxScene = async (bg) => {
+  await page.evaluate((bg) => {
+    window.__blank(400, 300); const a = window.__app, d = a.doc; d.layers[0].name = 'Base'; d.layers[0].ctx.fillStyle = bg; d.layers[0].ctx.fillRect(0, 0, 400, 300);
+    const B = d.addLayer('Box'); B.ctx.fillStyle = '#2040e0'; B.ctx.fillRect(100, 100, 100, 100); d.emit('structure'); a.setTool('move');
+  }, bg);
+  await wait();
+};
+const fxOn = (patch) => gx(`${G.byName('Box')}.effects = ${JSON.stringify(patch)}; d.emit('structure')`).then(() => wait());
+
+// shadows & glows blend with what is *under* the layer
+await fxScene('#ffffff');
+await fxOn({ outerGlow: { on: true, color: '#ffffbe', opacity: 1, blend: 'screen', spread: 0, size: 12 } });
+assert.ok(near(await rgbOf(97, 150), [255, 255, 255], 2)); ok('a Screen glow is invisible over white (it blends with the backdrop, as in Photoshop)');
+await fxScene('#202040');
+await fxOn({ outerGlow: { on: true, color: '#ffffbe', opacity: 1, blend: 'screen', spread: 0, size: 12 } });
+const glowDark = await rgbOf(97, 150); assert.ok(glowDark[0] > 120 && glowDark[1] > 120, `glow ${glowDark}`); ok('…but clearly lights up a dark backdrop');
+await fxScene('#c8c8c8');
+await fxOn({ dropShadow: { on: true, color: '#ff8000', opacity: 1, blend: 'multiply', angle: 90, distance: 20, spread: 0, size: 0 } });
+assert.ok(near(await rgbOf(150, 210), [200, 100, 0], 3)); ok('a Multiply drop shadow multiplies the backdrop colour (200 × orange = 200,100,0) instead of painting orange over it');
+await fxOn({ dropShadow: { on: true, color: '#ff8000', opacity: 1, blend: 'normal', angle: 90, distance: 20, spread: 0, size: 0 } });
+assert.ok(near(await rgbOf(150, 210), [255, 128, 0], 3)); ok('…while the same shadow in Normal mode paints it flat');
+
+// extra blend modes in the compositor
+await fxScene('#808080');
+const blendCase = async (mode, expect, tol = 3) => { await gx(`${G.byName('Box')}.blend = ${JSON.stringify(mode)}; ${G.byName('Box')}.effects = null; d.emit('structure')`); await wait(); const c = await rgbOf(150, 150); assert.ok(near(c, expect, tol), `${mode}: got ${c}, expected ${expect}`); };
+await blendCase('linear burn', [0, 0, 97]);        // Cb + Cs − 1 : 128+32−255=0 | 128+64−255=0 | 128+224−255=97
+await blendCase('linear light', [0, 1, 255]);      // Cb + 2Cs − 1 clamped
+await blendCase('subtract', [96, 64, 0]);          // Cb − Cs
+await blendCase('divide', [255, 255, 146]);        // Cb / Cs
+await blendCase('hard mix', [0, 0, 255], 3);   // Cb + Cs >= 255 ? 255 : 0
+await blendCase('multiply', [16, 32, 112], 4);     // sanity: a native mode still works
+ok('Linear Burn, Linear Light, Subtract, Divide and Hard Mix composite per their definitions (and native modes are unaffected)');
+await gx(`${G.byName('Box')}.blend = 'normal'; d.emit('structure')`);
+
+// gradient overlays: multi-stop, radial, reflected, per-stop opacity, reverse, scale
+await fxScene('#ffffff');
+const gradFx = (g) => fxOn({ gradientOverlay: { on: true, color1: '#000000', color2: '#ffffff', opacity: 1, blend: 'normal', angle: 0, reverse: false, ...g } });
+await gradFx({ stops: [{ at: 0, color: '#000000', alpha: 1 }, { at: 0.5, color: '#ffffff', alpha: 1 }, { at: 1, color: '#000000', alpha: 1 }] });
+const gl3 = [lum(await rgbOf(102, 150)), lum(await rgbOf(150, 150)), lum(await rgbOf(198, 150))]; assert.ok(gl3[0] < 40 && gl3[1] > 215 && gl3[2] < 40, `${gl3}`); ok('a 3-stop gradient (black → white → black) renders all of its stops');
+await gradFx({ style: 'radial', stops: [{ at: 0, color: '#ff0000', alpha: 1 }, { at: 1, color: '#0000ff', alpha: 1 }] });
+const radC = await rgbOf(150, 150), radE = await rgbOf(102, 150); assert.ok(radC[0] > 220 && radC[2] < 40 && radE[2] > 200 && radE[0] < 50, `${radC} ${radE}`); ok('a radial gradient runs from the centre outwards (red centre → blue edge)');
+await gradFx({ style: 'reflected', angle: 0, stops: [{ at: 0, color: '#ffffff', alpha: 1 }, { at: 1, color: '#000000', alpha: 1 }] });
+assert.ok(lum(await rgbOf(150, 150)) > 215 && lum(await rgbOf(102, 150)) < 45 && lum(await rgbOf(198, 150)) < 45); ok('a reflected gradient mirrors about the centre');
+await gradFx({ style: 'angle', angle: 0 });
+assert.ok(lum(await rgbOf(190, 120)) !== lum(await rgbOf(110, 180))); ok('an angle (conic) gradient renders');
+await gradFx({ stops: [{ at: 0, color: '#ff0000', alpha: 1 }, { at: 1, color: '#ff0000', alpha: 0 }] });
+const fadeL = await rgbOf(103, 150), fadeR = await rgbOf(197, 150); assert.ok(fadeL[0] > 200 && fadeL[2] < 60 && fadeR[2] > 160 && fadeR[0] < 90, `${fadeL} ${fadeR}`); ok('per-stop opacity fades the overlay out to the layer\'s own colour');
+await gradFx({ reverse: true }); assert.ok(lum(await rgbOf(103, 150)) > 215 && lum(await rgbOf(197, 150)) < 40); ok('Reverse flips the gradient');
+await gradFx({ scale: 0.5 }); assert.ok(lum(await rgbOf(110, 150)) < 15 && lum(await rgbOf(190, 150)) > 240); ok('Scale 50% compresses the gradient into the middle of the layer');
+
+// satin
+await fxScene('#ffffff');
+await fxOn({ satin: { on: true, color: '#000000', opacity: 1, blend: 'normal', angle: 0, distance: 25, size: 10, invert: false } });
+const satIn = [lum(await rgbOf(150, 150)), lum(await rgbOf(125, 150)), lum(await rgbOf(175, 150))];
+await fxOn({ satin: { on: true, color: '#000000', opacity: 1, blend: 'normal', angle: 0, distance: 25, size: 10, invert: true } });
+const satInv = [lum(await rgbOf(150, 150)), lum(await rgbOf(125, 150)), lum(await rgbOf(175, 150))];
+const base = lum([32, 64, 224]);
+assert.ok(satIn.some((v) => Math.abs(v - base) > 15) && satInv.some((v) => Math.abs(v - base) > 15), `${satIn} / ${satInv}`); assert.ok(satIn.some((v, i) => Math.abs(v - satInv[i]) > 20)); ok('Satin shades the interior, and Invert reverses the effect');
+assert.ok(near(await rgbOf(60, 150), [255, 255, 255], 1)); ok('…without touching anything outside the shape');
+await fxOpen('Satin'); assert.match(await page.locator('.fx-controls h3').textContent(), /Satin/); await page.keyboard.press('Escape'); await wait(); ok('Satin is in the Layer Style dialog');
 
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));

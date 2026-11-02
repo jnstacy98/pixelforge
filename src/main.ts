@@ -8,7 +8,7 @@ import { applyFilter, clearSelection, fillSelection } from './filters';
 import { formDialog } from './dialog';
 import { featherSelection, invertSelection } from './selection';
 import { defaultAdjustment } from './adjust';
-import { defaultFx } from './fx';
+import { defaultFx, FX_TUNE } from './fx';
 import { composite } from './render';
 import { editor } from './texttool';
 import { clearStyle, copyStyle, isStyling, openLayerStyle, pasteStyle } from './stylesdialog';
@@ -348,3 +348,46 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
 };
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;
+
+/** Diagnostic: import a PSD and compare our composite with the flattened preview Photoshop stored in the file. */
+(window as any).__psdCompare = async (b64: string, name: string, wantImages: boolean | { y: number; x0: number; x1: number; vertical?: boolean } = false) => {
+  const { readPsd } = await import('ag-psd');
+  const { importFile } = await import('./io');
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const res: Record<string, unknown> = { name, bytes: bytes.length };
+  let psd;
+  try { psd = readPsd(buf, { skipThumbnail: true }); } catch (e) { return { ...res, error: 'readPsd: ' + (e as Error).message }; }
+  res.size = `${psd.width}x${psd.height}`; res.colorMode = psd.colorMode; res.bits = psd.bitsPerChannel;
+  let doc: Doc;
+  try { doc = await importFile({ name, data: buf }); } catch (e) { return { ...res, error: 'import: ' + (e as Error).message }; }
+  const L = doc.layers;
+  Object.assign(res, {
+    layers: L.filter((l) => !l.isGroup && !l.adjustment).length, groups: L.filter((l) => l.isGroup).length, adjustments: L.filter((l) => l.adjustment).length,
+    styled: L.filter((l) => l.effects).length, clipped: L.filter((l) => l.clipped).length, masks: L.filter((l) => l.mask).length, hidden: L.filter((l) => !l.visible).length,
+    blends: [...new Set(L.map((l) => l.blend).filter((b) => b !== 'normal' && b !== 'pass through'))], notes: doc.notes,
+  });
+  if (!psd.canvas) return { ...res, error: 'file has no flattened preview to compare against' };
+  const W = doc.width, H = doc.height, ours = document.createElement('canvas'); ours.width = W; ours.height = H;
+  const octx = ours.getContext('2d', { willReadFrequently: true })!;
+  octx.fillStyle = '#fff'; octx.fillRect(0, 0, W, H);
+  const tmp = document.createElement('canvas'); tmp.width = W; tmp.height = H; composite(doc, tmp.getContext('2d', { willReadFrequently: true })!); octx.drawImage(tmp, 0, 0);
+  const theirs = document.createElement('canvas'); theirs.width = W; theirs.height = H; const tctx = theirs.getContext('2d', { willReadFrequently: true })!;
+  tctx.fillStyle = '#fff'; tctx.fillRect(0, 0, W, H); tctx.drawImage(psd.canvas, 0, 0);
+  const a = octx.getImageData(0, 0, W, H).data, b = tctx.getImageData(0, 0, W, H).data;
+  let sum = 0, over16 = 0, over48 = 0, worst = 0;
+  for (let i = 0; i < a.length; i += 4) { const d = Math.max(Math.abs(a[i] - b[i]), Math.abs(a[i + 1] - b[i + 1]), Math.abs(a[i + 2] - b[i + 2])); sum += d; if (d > 16) over16++; if (d > 48) over48++; if (d > worst) worst = d; }
+  const n = W * H;
+  Object.assign(res, { mae: +(sum / n).toFixed(2), pctOver16: +((over16 / n) * 100).toFixed(2), pctOver48: +((over48 / n) * 100).toFixed(2), worst });
+  if (typeof wantImages === 'object' && wantImages) {              // debugging: raw pixels of one scanline from both renderings
+    const sc = wantImages as { y: number; x0: number; x1: number; vertical?: boolean }, y = sc.y, x0 = sc.x0, x1 = sc.x1, row = (d: Uint8ClampedArray) => { const o: number[][] = []; for (let t = x0; t < x1; t++) { const i = (sc.vertical ? t * W + y : y * W + t) * 4; o.push([d[i], d[i + 1], d[i + 2]]); } return o; };
+    res.rowOurs = row(a); res.rowTheirs = row(b);
+  }
+  if (wantImages === true) {
+    const s = Math.min(1, 560 / W), mk = (c: HTMLCanvasElement) => { const o = document.createElement('canvas'); o.width = Math.round(W * s); o.height = Math.round(H * s); o.getContext('2d')!.drawImage(c, 0, 0, o.width, o.height); return o; };
+    const o1 = mk(ours), o2 = mk(theirs), sheet = document.createElement('canvas'); sheet.width = o1.width * 2 + 10; sheet.height = o1.height;
+    const sx = sheet.getContext('2d')!; sx.fillStyle = '#444'; sx.fillRect(0, 0, sheet.width, sheet.height); sx.drawImage(o1, 0, 0); sx.drawImage(o2, o1.width + 10, 0);
+    res.image = sheet.toDataURL('image/png');
+  }
+  return res;
+};
+(window as any).__fxTune = FX_TUNE;

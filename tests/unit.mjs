@@ -233,13 +233,82 @@ t('effects survive a PSD conversion round-trip', () => {
 });
 t('unsupported PSD effects are reported, supported ones kept', () => {
   const r = F.fromPsdEffects({ dropShadow: [{ enabled: true, size: { units: 'Pixels', value: 5 }, distance: { units: 'Pixels', value: 3 }, color: { r: 0, g: 0, b: 0 }, opacity: 0.5, angle: 120, blendMode: 'multiply' }], bevel: { enabled: true }, satin: { enabled: true } });
-  assert.ok(r.fx.dropShadow.on && r.fx.bevel.on); assert.deepEqual(r.unsupported, ['satin']);
+  assert.ok(r.fx.dropShadow.on && r.fx.bevel.on && r.fx.satin.on); assert.deepEqual(r.unsupported, []);
   assert.ok(!F.fromPsdEffects({ disabled: true, dropShadow: [{ enabled: true }] }).fx.dropShadow.on);
 });
 t('PSD effects with FRGB colours and unknown blend modes are tolerated', () => {
-  const r = F.fromPsdEffects({ solidFill: [{ enabled: true, color: { fr: 1, fg: 0, fb: 0 }, blendMode: 'vivid light', opacity: 1 }] });
+  const r = F.fromPsdEffects({ solidFill: [{ enabled: true, color: { fr: 1, fg: 0, fb: 0 }, blendMode: 'some future mode', opacity: 1 }] });
   assert.equal(r.fx.colorOverlay.color, '#ff0000'); assert.equal(r.fx.colorOverlay.blend, 'normal');
+  assert.equal(F.fromPsdEffects({ solidFill: [{ enabled: true, blendMode: 'vivid light', opacity: 1 }] }).fx.colorOverlay.blend, 'vivid light');
 });
+
+// ---- lessons from real Photoshop files (tests/real-psd.mjs)
+t('multi-stop radial gradient overlays keep their stops, style and scale on PSD import', () => {
+  const grad = { name: 'x', type: 'solid', colorStops: [{ color: { r: 0, g: 0, b: 255 }, location: 0, midpoint: 0.5 }, { color: { r: 255, g: 0, b: 0 }, location: 0.5, midpoint: 0.5 }, { color: { r: 255, g: 255, b: 0 }, location: 1, midpoint: 0.5 }], opacityStops: [{ opacity: 1, location: 0, midpoint: 0.5 }, { opacity: 1, location: 1, midpoint: 0.5 }] };
+  const r = F.fromPsdEffects({ gradientOverlay: [{ enabled: true, type: 'radial', angle: 90, scale: 1.12, opacity: 0.9, gradient: grad }] }), g = r.fx.gradientOverlay;
+  assert.equal(g.style, 'radial'); assert.equal(g.scale, 1.12); assert.equal(g.stops.length, 3); assert.deepEqual(g.stops.map((s) => s.at), [0, 0.5, 1]); assert.equal(g.stops[1].color, '#ff0000'); assert.deepEqual(r.unsupported, []);
+  assert.deepEqual(F.fromPsdEffects(F.toPsdEffects(r.fx)).fx, r.fx);                               // and back out again
+});
+t('simple 2-colour gradients stay simple; per-stop opacity is preserved; noise gradients are reported', () => {
+  const two = { name: 'x', type: 'solid', colorStops: [{ color: { r: 0, g: 0, b: 0 }, location: 0, midpoint: 0.5 }, { color: { r: 255, g: 255, b: 255 }, location: 1, midpoint: 0.5 }], opacityStops: [{ opacity: 1, location: 0, midpoint: 0.5 }, { opacity: 1, location: 1, midpoint: 0.5 }] };
+  const a = F.fromPsdEffects({ gradientOverlay: [{ enabled: true, type: 'linear', angle: 45, gradient: two }] }).fx.gradientOverlay; assert.equal(a.stops, undefined); assert.equal(a.style, undefined); assert.equal(a.scale, undefined);
+  const fade = { ...two, opacityStops: [{ opacity: 1, location: 0, midpoint: 0.5 }, { opacity: 0, location: 1, midpoint: 0.5 }] };
+  const b = F.fromPsdEffects({ gradientOverlay: [{ enabled: true, gradient: fade }] }).fx.gradientOverlay; assert.equal(b.stops.length, 2); assert.deepEqual(b.stops.map((s) => s.alpha), [1, 0]);
+  const n = F.fromPsdEffects({ gradientOverlay: [{ enabled: true, gradient: { type: 'noise', name: 'n' } }] }); assert.equal(n.fx.gradientOverlay, undefined); assert.deepEqual(n.unsupported, ['noise gradient overlay']);
+});
+t('satin converts to and from PSD', () => {
+  const fx = { satin: { on: true, color: '#cc5c5c', opacity: 0.5, blend: 'multiply', angle: 19, distance: 11, size: 14, invert: true } };
+  assert.deepEqual(F.fromPsdEffects(F.toPsdEffects(fx)).fx, fx);
+});
+t('"use global light" follows the document light angle, otherwise the effect keeps its own', () => {
+  const sh = (useGlobalLight) => ({ dropShadow: [{ enabled: true, angle: 120, distance: { units: 'Pixels', value: 5 }, size: { units: 'Pixels', value: 5 }, useGlobalLight }], bevel: { enabled: true, angle: 120, altitude: 50, useGlobalLight } });
+  const on = F.fromPsdEffects(sh(true), { angle: 132, altitude: 30 }).fx, off = F.fromPsdEffects(sh(false), { angle: 132, altitude: 30 }).fx, none = F.fromPsdEffects(sh(true)).fx;
+  assert.equal(on.dropShadow.angle, 132); assert.equal(on.bevel.angle, 132); assert.equal(on.bevel.altitude, 30);
+  assert.equal(off.dropShadow.angle, 120); assert.equal(off.bevel.altitude, 50); assert.equal(none.dropShadow.angle, 120);
+});
+t('gradientEnds honours scale (a smaller gradient is a shorter line around the centre)', () => {
+  const full = F.gradientEnds(0, 0, 100, 40, 0, 1), half = F.gradientEnds(0, 0, 100, 40, 0, 0.5);
+  assert.deepEqual([full.x0, full.x1], [0, 100]); assert.deepEqual([half.x0, half.x1], [25, 75]);
+});
+t('shadow and glow profiles use the Photoshop-calibrated constants', () => {
+  const sh = F.softEdge(10, 0, 'shadow'), gl = F.softEdge(10, 0, 'glow');
+  assert.ok(Math.abs(sh.sigma - 4) < 1e-9 && sh.grow === 0); assert.ok(Math.abs(gl.sigma - 10 / 3) < 1e-9 && Math.abs(gl.grow - 3) < 1e-9);
+  assert.ok(F.softEdge(10, 50, 'shadow').sigma < sh.sigma && F.softEdge(10, 50, 'shadow').grow > sh.grow);          // spread tightens the blur and fattens the core
+});
+
+// ---- extra blend modes
+import * as BL from '../src/blend.ts';
+const blend1 = (mode, back, src, op = 1, sa = 255, ba = 255) => { const b = new Uint8ClampedArray([...back, ba]), s = new Uint8ClampedArray([...src, sa]); BL.blendInto(b, s, mode, op); return [...b]; };
+const close = (a, b, tol = 1) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
+t('blend modes match their Photoshop definitions on opaque pixels', () => {
+  assert.ok(close(blend1('linear burn', [200, 100, 255], [100, 100, 100]), [45, 0, 100, 255]), 'linear burn  = Cb + Cs − 1');
+  assert.ok(close(blend1('linear light', [128, 128, 128], [200, 128, 50]), [255, 129, 0, 255]), 'linear light = Cb + 2Cs − 1');
+  assert.ok(close(blend1('subtract', [200, 100, 50], [100, 120, 10]), [100, 0, 40, 255]), 'subtract');
+  assert.ok(close(blend1('divide', [100, 100, 100], [200, 50, 0]), [128, 255, 255, 255]), 'divide = Cb / Cs');
+  assert.ok(close(blend1('hard mix', [100, 200, 10], [100, 100, 10]), [0, 255, 0, 255]), 'hard mix = (Cb + Cs ≥ 1)');
+  assert.ok(close(blend1('pin light', [150, 150, 150], [50, 250, 128]), [100, 245, 150, 255]), 'pin light');
+});
+t('vivid light is colour burn below 50% source and colour dodge above', () => {
+  assert.ok(blend1('vivid light', [200, 200, 200], [64, 64, 64])[0] < 200);
+  assert.ok(blend1('vivid light', [100, 100, 100], [192, 192, 192])[0] > 100);
+  assert.equal(blend1('vivid light', [100, 100, 100], [255, 255, 255])[0], 255); assert.equal(blend1('vivid light', [100, 100, 100], [0, 0, 0])[0], 0);
+});
+t('darker / lighter color pick the whole colour, not channels', () => {
+  const back = [200, 10, 10], src = [10, 150, 10];            // luminosity: back 67, source 93
+  assert.deepEqual(blend1('darker color', back, src).slice(0, 3), back); assert.deepEqual(blend1('lighter color', back, src).slice(0, 3), src);
+});
+t('opacity, transparent sources and transparent backdrops composite correctly', () => {
+  assert.deepEqual(blend1('linear burn', [100, 100, 100], [50, 50, 50], 0), [100, 100, 100, 255]);             // opacity 0 → untouched
+  assert.deepEqual(blend1('subtract', [10, 20, 30], [99, 99, 99], 1, 0), [10, 20, 30, 255]);                  // transparent source
+  assert.deepEqual(blend1('linear light', [0, 0, 0], [30, 60, 90], 1, 255, 0), [30, 60, 90, 255]);            // over nothing: just the source
+  const half = blend1('subtract', [200, 200, 200], [100, 100, 100], 0.5); assert.ok(close(half, [150, 150, 150, 255]));
+});
+t('dissolve is deterministic and shows roughly `opacity` of the pixels', () => {
+  const n = 4000, run = () => { const b = new Uint8ClampedArray(n * 4).fill(255), s = new Uint8ClampedArray(n * 4); for (let i = 0; i < n; i++) { s[i * 4] = 0; s[i * 4 + 1] = 0; s[i * 4 + 2] = 0; s[i * 4 + 3] = 255; } BL.blendInto(b, s, 'dissolve', 0.3); return b; };
+  const a = run(), b2 = run(); assert.deepEqual([...a], [...b2]); let dark = 0; for (let i = 0; i < n; i++) if (a[i * 4] < 128) dark++;
+  assert.ok(Math.abs(dark / n - 0.3) < 0.05, `fraction ${dark / n}`);
+});
+t('isCustomBlend recognises exactly the non-native modes', () => { assert.ok(BL.isCustomBlend('vivid light') && BL.isCustomBlend('dissolve')); assert.ok(!BL.isCustomBlend('multiply') && !BL.isCustomBlend('normal')); });
 
 // ---- bevel & emboss maths
 const discF = (w, h, cx, cy, r) => { const c = new Float32Array(w * h); for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) c[y * w + x] = Math.hypot(x - cx + 0.0, y - cy) <= r ? 1 : 0; return c; };
@@ -304,6 +373,11 @@ t('bevel survives a PSD conversion round-trip (all styles and techniques)', () =
     const fx = { bevel: bev({ style, technique, depth: 240, direction: 'down', size: 9, soften: 2, angle: 75, altitude: 55, hiColor: '#ffeecc', hiBlend: 'screen', hiOpacity: 0.6, shColor: '#001122', shBlend: 'multiply', shOpacity: 0.9 }) };
     const back = F.fromPsdEffects(F.toPsdEffects(fx)); assert.deepEqual(back.fx, fx); assert.deepEqual(back.unsupported, []);
   }
+});
+t('PSD bevel strength is a fraction (1 = 100%): read 100× off before real Photoshop files showed it', () => {
+  assert.equal(F.fromPsdEffects({ bevel: { enabled: true, strength: 1 } }).fx.bevel.depth, 100);
+  assert.equal(F.fromPsdEffects({ bevel: { enabled: true, strength: 2.4 } }).fx.bevel.depth, 240);
+  assert.equal(F.toPsdEffects({ bevel: bev({ depth: 150 }) }).bevel.strength, 1.5);
 });
 t('bevel textures / gloss contours in PSDs are reported, the bevel itself is kept', () => {
   const r = F.fromPsdEffects({ bevel: { enabled: true, style: 'inner bevel', size: { units: 'Pixels', value: 7 }, useTexture: true, contour: { name: 'Ring', curve: [] } } });

@@ -5,3 +5,6 @@ release
 tests/screenshot.png
 tests/screenshot*.png
 tests/caf-*.png
+tests/.psd-fixtures/
+tests/.real-psd-results.json
+.real-psd-results.json

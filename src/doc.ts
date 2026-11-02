@@ -3,6 +3,7 @@ import { renderText, textLabel, type TextData } from './text';
 import { cloneAdjustment, type AdjustmentData } from './adjust';
 import { applyAdjustmentOnto, composite, renderedCanvas } from './render';
 import { cloneFx, type LayerEffects } from './fx';
+import type { Styled } from './fxrender';
 
 export interface Rect { x: number; y: number; w: number; h: number }
 export type ChangeKind = 'pixels' | 'structure' | 'selection';
@@ -39,6 +40,17 @@ export const BLEND_MODES: { id: string; label: string; op: GlobalCompositeOperat
   { id: 'saturation', label: 'Saturation', op: 'saturation' },
   { id: 'color', label: 'Color', op: 'color' },
   { id: 'luminosity', label: 'Luminosity', op: 'luminosity' },
+  // no native canvas operator: composited per pixel (see blend.ts); `op` is only a fallback
+  { id: 'linear burn', label: 'Linear Burn', op: 'source-over' },
+  { id: 'darker color', label: 'Darker Color', op: 'source-over' },
+  { id: 'lighter color', label: 'Lighter Color', op: 'source-over' },
+  { id: 'vivid light', label: 'Vivid Light', op: 'source-over' },
+  { id: 'linear light', label: 'Linear Light', op: 'source-over' },
+  { id: 'pin light', label: 'Pin Light', op: 'source-over' },
+  { id: 'hard mix', label: 'Hard Mix', op: 'source-over' },
+  { id: 'subtract', label: 'Subtract', op: 'source-over' },
+  { id: 'divide', label: 'Divide', op: 'source-over' },
+  { id: 'dissolve', label: 'Dissolve', op: 'source-over' },
 ];
 /** Groups can additionally be Pass Through (the default: their contents composite as if ungrouped). */
 export const GROUP_BLEND_MODES = [{ id: 'pass through', label: 'Pass Through', op: 'source-over' as GlobalCompositeOperation }, ...BLEND_MODES];
@@ -82,7 +94,7 @@ export class Layer {
   fillOpacity = 1;
   /** Bumped whenever the layer's pixels / mask may have changed; keys the styled-render cache. */
   rev = 0;
-  styled: { key: string; canvas: HTMLCanvasElement } | null = null;
+  styled: { key: string; styled: Styled } | null = null;
   /** Set while the text editor overlay is open on this layer. */
   hiddenForEdit = false;
   /** 'group' layers have no pixels of their own: they hold other layers (those whose `parent` is this group). */
