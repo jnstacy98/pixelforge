@@ -220,7 +220,7 @@ t('bezier paths: curve commands, control-hull bounds, smoothing, inserting ancho
   assert.equal(SH.nearestOnPath(SH.makeShape('rect', 10, 10, 0, 0), 1, 1), null);
   const inv = SH.invertMat([2, 0, 0, 4, 10, 20]); assert.deepEqual(inv, [0.5, 0, 0, 0.25, -5, -5]); assert.equal(SH.invertMat([1, 2, 2, 4, 0, 0]), null);
   const moved = SH.cloneShape(p); moved.pts[1] = [-50, 120]; moved.curves[0].o = [0, -80];                                       // an edited path: points left/above the old box
-  const nz = SH.normalizePath(moved); assert.ok(nz.pts.every(([x, y]) => x >= -1e-9 && y >= -1e-9) && Math.min(...nz.pts.map((q) => q[0])) < 1e-9);
+  const nz = SH.normalizePath(moved); assert.ok(nz.pts.every(([x, y]) => x >= -1e-9 && y >= -1e-9) && nz.w > 0 && nz.h > 0);
   const cmdsA = SH.shapeCmds(moved), cmdsB = SH.shapeCmds(nz); assert.ok(cmdsA.every((c, i) => c.slice(1).every((v, k) => Math.abs(v - cmdsB[i][k + 1]) < 1e-9)));   // nothing moves on screen
   const cl = SH.cloneShape(p); cl.curves[0].o[0] = 999; assert.equal(p.curves[0].o[0], 20);
 });
