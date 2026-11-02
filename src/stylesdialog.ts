@@ -2,6 +2,7 @@ import { app } from './state';
 import { BLEND_MODES, type Layer } from './doc';
 import { allPatterns, definePattern, hasPattern, getPattern } from './patterns';
 import { CONTOUR_NAMES, contourLUT, type Contour } from './contour';
+import { openContourEditor } from './contoureditor';
 import { FX_LABELS, FX_ORDER, cloneFx, defaultFx, sameFx, type FxKind, type LayerEffects } from './fx';
 
 let busy = false;
@@ -77,7 +78,7 @@ export function openLayerStyle(layer: Layer = app.doc.active, focus?: FxKind) {
     const sel = el('select'), cv = el('canvas', { width: 56, height: 30 });
     const cur = () => d[key] as Contour | undefined;
     const custom = cur()?.pts && !CONTOUR_NAMES.includes(cur()!.name) ? cur()!.name : null;
-    sel.innerHTML = CONTOUR_NAMES.map((n) => `<option value="${n}">${n}</option>`).join('') + (custom ? `<option value="__custom">Custom: ${custom.replace(/[<&"]/g, '')}</option>` : '');
+    sel.innerHTML = CONTOUR_NAMES.map((n) => `<option value="${n}">${n}</option>`).join('') + (custom ? `<option value="__custom">${custom === 'Custom' ? 'Custom' : 'Custom: ' + custom.replace(/[<&"]/g, '')}</option>` : '');
     sel.value = custom ? '__custom' : cur()?.name ?? 'Linear';
     const draw = () => {
       const x = cv.getContext('2d')!, lut = contourLUT(cur());
@@ -88,7 +89,15 @@ export function openLayerStyle(layer: Layer = app.doc.active, focus?: FxKind) {
     };
     sel.onchange = () => { if (sel.value === '__custom') return; if (sel.value === 'Linear') delete d[key]; else d[key] = { name: sel.value }; draw(); changed(); };
     draw();
-    return row(label, sel, cv);
+    const edit = el('button', { type: 'button', textContent: 'Edit…', title: 'Draw your own contour curve' });
+    edit.onclick = async () => {
+      const original = cur();
+      const res = await openContourEditor(original, label, (c) => { if (c) d[key] = c; else delete d[key]; draw(); changed(); });
+      if (res === null) { if (original) d[key] = original; else delete d[key]; changed(); }
+      else if (res) d[key] = res; else delete d[key];
+      showControls();
+    };
+    return row(label, sel, cv, edit);
   };
   const common = (d: Record<string, unknown>) => [row('Blend', ...blend(d)), row('Opacity %', ...range(d, 'opacity', 0, 1, 0.01, 100))];
   const controls: Record<FxKind, (d: never) => HTMLElement[]> = {

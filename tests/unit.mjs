@@ -322,6 +322,26 @@ t('contours: presets as tables, custom curves, smooth vs stepped, effect usage, 
   const s0 = F.bevelShade(h0, 41, 41, 120, 30), s1 = F.bevelShade(h0, 41, 41, 120, 30, { name: 'Cone - Inverted' }); assert.ok(s0.hi.some((v, i) => Math.abs(v - s1.hi[i]) > 0.1));
 });
 
+t('contour editor helpers: points from presets, add / move / remove / hit, corner vs smooth tables', () => {
+  const lin = CT.contourPoints(undefined); assert.deepEqual(lin, { pts: [[0, 0], [255, 255]], corner: true });
+  const cove = CT.contourPoints({ name: 'Cove - Deep' }); assert.equal(cove.corner, false); assert.equal(cove.pts.length, 4);
+  const cust = CT.contourPoints({ name: 'Custom', pts: [[0, 0], [100, 200], [255, 255]], corner: true }); assert.deepEqual(cust, { pts: [[0, 0], [100, 200], [255, 255]], corner: true });
+  cove.pts[0][0] = 99; assert.equal(CT.CONTOUR_PRESETS['Cove - Deep'].pts[0][0], 0);                                                    // copies, never the preset itself
+  const a = CT.addPoint([[0, 0], [255, 255]], 128, 200); assert.deepEqual(a.pts, [[0, 0], [128, 200], [255, 255]]); assert.equal(a.index, 1);
+  assert.equal(CT.addPoint(a.pts, 128.4, 10).index, -1);                                                                                   // too close to an existing x → refused
+  const b = CT.addPoint(a.pts, 300, -5); assert.equal(b.index, -1);                                                                         // x clamps to 255 where a point already is
+  const m = CT.movePoint(a.pts, 1, 300, 500); assert.deepEqual(m[1], [254, 255]);                                                           // inner points stay between their neighbours, y clamps
+  assert.deepEqual(CT.movePoint(a.pts, 0, 99, 40)[0], [0, 40]); assert.deepEqual(CT.movePoint(a.pts, 2, 99, 40)[2], [255, 40]);              // end points only slide vertically
+  assert.equal(CT.removePoint(a.pts, 1).length, 2); assert.equal(CT.removePoint(a.pts, 0).length, 3); assert.equal(CT.removePoint(a.pts, 2).length, 3);
+  assert.equal(CT.hitPoint(a.pts, 130, 203), 1); assert.equal(CT.hitPoint(a.pts, 200, 0), -1);
+  assert.equal(CT.contourFromPoints([[0, 0], [255, 255]], false), undefined); assert.deepEqual(CT.contourFromPoints([[0, 0], [128, 255], [255, 0]], true), { name: 'Custom', pts: [[0, 0], [128, 255], [255, 0]], corner: true });
+  // corner = straight segments, otherwise a smooth monotone curve through the same points
+  const pts = [[0, 0], [64, 200], [192, 220], [255, 255]], sm = CT.contourLUT({ name: 'Custom', pts }), co = CT.contourLUT({ name: 'Custom', pts, corner: true });
+  assert.ok(Math.abs(co[32] - 100 / 255) < 0.01);                                                                                           // exactly halfway along the first straight segment
+  assert.ok(Math.abs(sm[32] - co[32]) > 0.02 && Math.abs(sm[64] - 200 / 255) < 0.01 && Math.abs(co[64] - 200 / 255) < 0.01);               // both pass through the points, differ between them
+  for (let i = 1; i < 256; i++) assert.ok(sm[i] >= sm[i - 1] - 1e-6);
+});
+
 // ---- smart objects
 import * as SM from '../src/smartmath.ts';
 t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {

@@ -2167,6 +2167,43 @@ assert.ok(await page.evaluate(() => !window.__app.doc.layers[0].smart.filterMask
 await page.keyboard.press('Control+z'); await wait();
 assert.deepEqual((await a0px(112, 130)).slice(0, 3), [208, 32, 32]); ok('…and undoes');
 
+// 6ah. contour editor
+await styleScene();
+await fxOpen('Drop Shadow');
+await fxSet('dropShadow', SH0);
+const linP = await prof();
+const editBtn = page.locator('.fx-panel button:has-text("Edit…")').first();
+await editBtn.click(); await page.waitForSelector('.contour-editor'); ok('the Layer Style dialog has an Edit… button that opens the contour editor');
+const cvBox = async () => (await page.locator('.contour-editor canvas').boundingBox());
+const atVal = async (x, y) => { const b = await cvBox(); return { x: b.x + 6 + x, y: b.y + 6 + (255 - y) }; };
+{ const a = await atVal(128, 255); await page.mouse.click(a.x, a.y); await page.waitForTimeout(250); }
+assert.deepEqual(await page.evaluate(() => document.querySelector('.contour-editor').__contour.get().pts), [[0, 0], [128, 255], [255, 255]]); ok('clicking the curve adds a point');
+const livePr = await prof(); assert.ok(livePr[0] > linP[0] + 20 && livePr[2] > linP[2]); assert.equal(await gx(`return ${G.byName('Box')}.effects.dropShadow.contour.name`), 'Custom'); ok('the shadow previews the new curve live (denser near the edge) while the editor is open');
+{ const a = await atVal(128, 255), b = await atVal(128, 80); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 6 }); await page.mouse.up(); await page.waitForTimeout(250); }
+const dragged = await page.evaluate(() => document.querySelector('.contour-editor').__contour.get().pts[1]); assert.ok(dragged[0] === 128 && Math.abs(dragged[1] - 80) <= 2); ok('dragging a point reshapes the curve');
+const dragProf = await prof(); assert.ok(dragProf[0] < livePr[0]);
+// Cancel restores the original (no contour)
+await page.click('.contour-editor button:has-text("Cancel")'); await page.waitForTimeout(300);
+assert.equal(await gx(`return ${G.byName('Box')}.effects.dropShadow.contour`), undefined); assert.deepEqual(await prof(), linP); ok('Cancel puts the shadow back exactly as it was');
+// OK keeps it; corner mode draws straight segments
+await page.locator('.fx-panel button:has-text("Edit…")').first().click(); await page.waitForSelector('.contour-editor');
+await page.evaluate(() => document.querySelector('.contour-editor').__contour.set([[0, 0], [100, 255], [255, 0]], true)); await page.waitForTimeout(250);
+const cornerProf = await prof();
+await page.click('.contour-editor button:has-text("OK")'); await page.waitForTimeout(300);
+const kept = await gx(`return ${G.byName('Box')}.effects.dropShadow.contour`); assert.ok(kept.name === 'Custom' && kept.corner === true && kept.pts.length === 3 && kept.pts[1][0] === 100); assert.deepEqual(await prof(), cornerProf); ok('OK keeps the custom contour (including the Corner setting)');
+assert.ok(await page.evaluate(() => [...document.querySelectorAll('.fx-panel select option')].some((o) => o.textContent === 'Custom'))); ok('the Contour menu then shows “Custom”');
+await fxOK();
+// double-click removes an inner point
+await fxOpen('Drop Shadow'); await page.locator('.fx-panel button:has-text("Edit…")').first().click(); await page.waitForSelector('.contour-editor');
+{ const a = await atVal(100, 255); await page.mouse.dblclick(a.x, a.y); await page.waitForTimeout(250); }
+assert.equal(await page.evaluate(() => document.querySelector('.contour-editor').__contour.get().pts.length), 2); ok('double-clicking a point removes it');
+await page.click('.contour-editor button:has-text("Cancel")'); await page.waitForTimeout(200);
+await page.click('.fx-panel button:has-text("Cancel")'); await wait();
+// a preset can be loaded as the starting point of an edit, and survives a PSD round trip as a custom curve
+await gx(`${G.byName('Box')}.effects = { dropShadow: { on: true, color: '#000000', opacity: 1, blend: 'normal', angle: 90, distance: 0, spread: 0, size: 24, contour: { name: 'Custom', pts: [[0, 0], [60, 200], [255, 255]] } } }; d.emit('structure')`); await wait();
+const rtE = await page.evaluate(() => window.__fxRoundtrip([[150, 205]]));
+assert.deepEqual(rtE.fxAfter.Box.effects.dropShadow.contour.pts, [[0, 0], [60, 200], [255, 255]]); ok('a custom contour keeps its points through a PSD round trip');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

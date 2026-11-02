@@ -1,6 +1,6 @@
 // Layer-style contours: tone curves that reshape an effect's falloff (pure; unit-tested).
 export type CPt = [number, number];                    // x, y in 0…255 (Photoshop's contour editor range)
-export interface Contour { name: string; pts?: CPt[] }
+export interface Contour { name: string; pts?: CPt[]; /** Custom curves: straight segments between points instead of a smooth curve. */ corner?: boolean }
 
 interface Preset { pts: CPt[]; smooth: boolean }
 /** Photoshop's contour presets (approximations of the stock curves). */
@@ -26,7 +26,7 @@ export function contourLUT(c: Contour | undefined | null): Float32Array | null {
   if (!c) return null;
   const preset = CONTOUR_PRESETS[c.name], pts = (c.pts ?? preset?.pts)?.slice().sort((a, b) => a[0] - b[0]);
   if (!pts || pts.length < 2 || c.name === 'Linear' && !c.pts) return null;
-  const smooth = c.pts ? c.pts.length > 2 && !isStepped(pts) : preset?.smooth ?? false;
+  const smooth = c.pts ? !c.corner && c.pts.length > 2 && !isStepped(pts) : preset?.smooth ?? false;
   const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]), n = pts.length, lut = new Float32Array(256);
   // monotone cubic (Fritsch–Carlson) tangents for smooth curves
   const dx = xs.slice(1).map((x, i) => x - xs[i]), sl = ys.slice(1).map((y, i) => (dx[i] ? (y - ys[i]) / dx[i] : 0)), m = new Array<number>(n).fill(0);
@@ -63,4 +63,36 @@ export function fromPsdContour(c: { name: string; curve: { x: number; y: number 
   if (/^linear$/i.test(c.name) || (pts.length === 2 && pts[0][0] === 0 && pts[0][1] === 0 && pts[1][0] === 255 && pts[1][1] === 255)) return undefined;
   const same = preset && preset.pts.length === pts.length && preset.pts.every((p, i) => p[0] === pts[i][0] && p[1] === pts[i][1]);
   return same ? { name: c.name } : { name: c.name || 'Custom', pts };
+}
+
+// ---- editing helpers (for the contour editor)
+const clampv = (v: number) => Math.min(255, Math.max(0, Math.round(v)));
+/** The editable points of a contour (a preset's own points, or the linear default). */
+export function contourPoints(c: Contour | undefined): { pts: CPt[]; corner: boolean } {
+  if (c?.pts) return { pts: c.pts.map((p) => [...p] as CPt), corner: !!c.corner };
+  const p = CONTOUR_PRESETS[c?.name ?? 'Linear'] ?? CONTOUR_PRESETS['Linear'];
+  return { pts: p.pts.map((q) => [...q] as CPt), corner: !p.smooth };
+}
+/** Index of the point within `r` of (x, y), or −1. */
+export const hitPoint = (pts: CPt[], x: number, y: number, r = 8) => pts.findIndex((p) => Math.hypot(p[0] - x, p[1] - y) <= r);
+/** Add a point (kept sorted by x; refused if one is already within a unit of that x or there are 32 points). */
+export function addPoint(pts: CPt[], x: number, y: number): { pts: CPt[]; index: number } {
+  x = clampv(x); y = clampv(y);
+  if (pts.length >= 32 || pts.some((p) => Math.abs(p[0] - x) < 1)) return { pts, index: -1 };
+  const out = [...pts.map((p) => [...p] as CPt), [x, y] as CPt].sort((a, b) => a[0] - b[0]);
+  return { pts: out, index: out.findIndex((p) => p[0] === x && p[1] === y) };
+}
+/** Move point `i` (end points slide only vertically; inner points stay between their neighbours). */
+export function movePoint(pts: CPt[], i: number, x: number, y: number): CPt[] {
+  const out = pts.map((p) => [...p] as CPt), last = out.length - 1;
+  out[i][1] = clampv(y);
+  if (i > 0 && i < last) out[i][0] = Math.min(out[i + 1][0] - 1, Math.max(out[i - 1][0] + 1, clampv(x)));
+  return out;
+}
+/** Remove an inner point (the two end points stay). */
+export const removePoint = (pts: CPt[], i: number): CPt[] => (i > 0 && i < pts.length - 1 ? pts.filter((_, k) => k !== i).map((p) => [...p] as CPt) : pts);
+/** The Contour for edited points: undefined if it is just the straight identity line. */
+export function contourFromPoints(pts: CPt[], corner: boolean): Contour | undefined {
+  if (pts.length === 2 && pts[0][0] === 0 && pts[0][1] === 0 && pts[1][0] === 255 && pts[1][1] === 255) return undefined;
+  return { name: 'Custom', pts: pts.map((p) => [...p] as CPt), ...(corner ? { corner: true } : {}) };
 }
