@@ -119,6 +119,26 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.equal(P.fromPsdAdjustment({ type: 'color lookup' }), null);
 });
 
+// ---- free transform maths
+import * as FT from '../src/xformmath.ts';
+t('free transform: model mapping, handle drags (anchor stays put), rotation, uniform scaling', () => {
+  const m = { w: 80, h: 60, cx: 140, cy: 130, sx: 1, sy: 1, angle: 0 };
+  assert.deepEqual(FT.corners(m), [100, 100, 180, 100, 180, 160, 100, 160]);
+  const near2 = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 1e-6);
+  const rot = { ...m, angle: 90, sx: 2 }; assert.ok(near2(FT.toDoc(rot, 80, 30), [140, 130 + 80]));                  // right-middle goes down after a 90° turn (x scaled 2×: 40 → 80)
+  for (const mm of [m, rot, { ...m, angle: 33, sx: 1.7, sy: 0.6 }]) { const [x, y] = FT.toDoc(mm, 12, 47); assert.ok(near2(FT.toLocal(mm, x, y), [12, 47])); }
+  const br = FT.dragHandle(m, 'br', 260, 220, false, false);                                                         // opposite corner (100,100) fixed
+  assert.ok(near2([br.sx, br.sy, ...FT.toDoc(br, 0, 0)], [2, 2, 100, 100]));
+  const fromC = FT.dragHandle(m, 'br', 220, 190, false, true);                                                       // centre fixed
+  assert.ok(near2([fromC.sx, fromC.sy, fromC.cx, fromC.cy], [2, 2, 140, 130]));
+  const edge = FT.dragHandle(m, 'r', 260, 999, false, false); assert.ok(near2([edge.sx, edge.sy, ...FT.toDoc(edge, 0, 0)], [2, 1, 100, 100]));
+  const uni = FT.dragHandle(m, 'br', 260, 130, true, false); assert.ok(Math.abs(uni.sx - uni.sy) < 1e-9);
+  const flip = FT.dragHandle(m, 'r', 60, 0, false, false); assert.ok(flip.sx < 0);                                   // dragging past the anchor flips
+  const rr = FT.dragHandle({ ...m, angle: 90 }, 'r', 140 - 0, 130 + 40, false, true); assert.ok(Math.abs(rr.sx - 1) < 1e-9);   // handles follow the rotated box
+  const turn = FT.rotateTo(m, 140, 200, 0, 0, false); assert.ok(Math.abs(turn.angle - 90) < 1e-9);
+  assert.equal(FT.rotateTo(m, 140 + 100, 130 + 30, 0, 0, true).angle % 15, 0);
+});
+
 // ---- smart objects
 import * as SM from '../src/smartmath.ts';
 t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {

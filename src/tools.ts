@@ -1,5 +1,6 @@
 import { app, hexToRgb, rgbToHex, paintColor, grayOf, type ToolId } from './state';
 import { TextTool } from './texttool';
+import { freeTransform } from './freetransform';
 import { getTip } from './brushtips';
 import { quantTilt, tiltShape } from './tilt';
 import { MarqueeTool, LassoTool, WandTool, QuickSelectTool } from './selecttools';
@@ -474,5 +475,5 @@ class HandTool implements Tool { cursor = 'grab'; down() {} move() {} up() {} }
 
 export const tools: Record<ToolId, Tool> = {
   move: new MoveTool(), marquee: new MarqueeTool(), brush: new PaintTool('brush'), eraser: new PaintTool('eraser'),
-  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), quick: new QuickSelectTool(), clone: new PaintTool('clone'), heal: new PaintTool('heal'), spot: new PaintTool('spot'), patch: new PatchTool(), cmove: new ContentMoveTool(),
+  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), quick: new QuickSelectTool(), clone: new PaintTool('clone'), heal: new PaintTool('heal'), spot: new PaintTool('spot'), patch: new PatchTool(), cmove: new ContentMoveTool(), transform: freeTransform,
 };

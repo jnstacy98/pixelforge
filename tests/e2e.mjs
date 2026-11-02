@@ -1782,6 +1782,54 @@ const rtP = await page.evaluate(() => window.__adjRoundtrip());
 assert.equal(rtP.layers.filter((l) => l.smart).length, 0); assert.equal(rtP.linked, 0); ok('a smart object that was painted on is saved as an ordinary layer (the stale source is dropped)');
 await page.evaluate(() => window.__app.doc.history.undo());
 
+// 6z. free transform
+const ftScene = async () => {
+  await page.evaluate(() => { window.__blank(400, 300); const a = window.__app, d = a.doc, l = d.layers[0]; l.ctx.clearRect(0, 0, 400, 300); l.ctx.fillStyle = '#d02020'; l.ctx.fillRect(100, 100, 80, 60); d.emit('structure'); d.setSelection(null); a.setTool('move'); });
+  await wait();
+};
+await ftScene();
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active); await wait();
+assert.equal(await page.evaluate(() => window.__app.toolId), 'transform'); ok('Ctrl+T starts Free Transform');
+assert.equal((await a0px(105, 105))[3], 0); ok('the layer’s pixels are lifted while transforming (the preview is drawn over the canvas)');
+// drag the bottom-right handle from (180,160) to (260,220): the top-left corner stays put
+{ const a = await toScreen(180, 160), b = await toScreen(260, 220); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 6 }); await page.mouse.up(); await wait(); }
+const m1 = await page.evaluate(() => ({ ...window.__xform.m })); assert.ok(Math.abs(m1.sx - 2) < 0.05 && Math.abs(m1.sy - 2) < 0.05 && Math.abs(m1.cx - 180) < 1 && Math.abs(m1.cy - 160) < 1, JSON.stringify(m1)); ok('dragging a corner handle scales around the opposite corner');
+// drag inside to move by (+20, +10)
+{ const a = await toScreen(180, 160), b = await toScreen(200, 170); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 4 }); await page.mouse.up(); await wait(); }
+assert.ok(near(await page.evaluate(() => [window.__xform.m.cx, window.__xform.m.cy]), [200, 170], 1)); ok('dragging inside the box moves it');
+await page.keyboard.press('Enter'); await wait();
+assert.equal(await page.evaluate(() => window.__app.toolId), 'move'); assert.equal(await page.evaluate(() => window.__xform.active), false); ok('Enter applies and returns to the previous tool');
+assert.equal((await a0px(125, 115))[0], 208); assert.equal((await a0px(120, 108))[3], 0); assert.equal((await a0px(275, 215))[0], 208); assert.equal((await a0px(285, 225))[3], 0); ok('the pixels land scaled to 160×120 at the new place (120…280 × 110…230)');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Free Transform');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal((await a0px(105, 105))[0], 208); assert.equal((await a0px(275, 215))[3], 0); ok("one undo step restores the original");
+// Esc cancels
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+await page.evaluate(() => window.__xform.set({ sx: 3, angle: 20 })); await page.keyboard.press('Escape'); await wait();
+assert.equal((await a0px(105, 105))[0], 208); assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel === 'Free Transform'), false); ok('Esc cancels and leaves the layer exactly as it was');
+// rotation by 90° about the centre (140,130): the 80×60 box becomes 60×80
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+await page.evaluate(() => window.__xform.set({ angle: 90 })); await page.keyboard.press('Enter'); await wait();
+assert.equal((await a0px(140, 95))[0], 208); assert.equal((await a0px(140, 165))[0], 208); assert.equal((await a0px(105, 130))[3], 0); ok('rotating by 90° turns the 80×60 rectangle into 60×80 about its centre');
+await page.keyboard.press('Control+z'); await wait();
+// only the selected pixels transform
+await page.evaluate(() => { window.__app.doc.setSelection({ x: 100, y: 100, w: 40, h: 60 }); });
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+assert.equal((await a0px(110, 110))[3], 0); assert.equal((await a0px(160, 110))[0], 208); ok('with a selection only the selected half is lifted; the rest stays on the layer');
+await page.evaluate(() => window.__xform.set({ cx: 100 + 20 + 120, cy: 130 })); await page.keyboard.press('Enter'); await wait();
+assert.equal((await a0px(250, 130))[0], 208); assert.equal((await a0px(110, 110))[3], 0); assert.equal((await a0px(160, 110))[0], 208); ok('…and lands where it was moved, leaving a hole behind');
+await page.keyboard.press('Control+z'); await wait();
+// smart object: transformed through its placed transform, re-rendered from the source
+await ftScene();
+await page.evaluate(() => { window.__smartApi.convertToSmart(window.__app.doc, window.__app.doc.active); });
+await page.waitForFunction(() => window.__app.doc.layers[0].smart); await wait();
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+await page.evaluate(() => window.__xform.set({ sx: 2, sy: 2 })); await page.keyboard.press('Enter'); await wait();
+assert.ok(await page.evaluate(() => !!window.__app.doc.layers[0].smart)); assert.equal((await a0px(65, 75))[0], 208);
+const sq = await page.evaluate(() => window.__app.doc.layers[0].smart.placed.transform); assert.ok(near(sq.slice(0, 2), [60, 70], 1) && near(sq.slice(4, 6), [220, 190], 1), JSON.stringify(sq)); ok('Free Transform on a smart object updates its placed transform and re-renders from the source');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal((await a0px(65, 75))[3], 0); ok('…and undoes cleanly');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

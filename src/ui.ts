@@ -4,6 +4,7 @@ import { FONTS } from './text';
 import { editAdjustment, newAdjustmentLayer } from './adjustdialog';
 import { ROUND, allTips } from './brushtips';
 import { openLayerStyle } from './stylesdialog';
+import { freeTransform } from './freetransform';
 import { editContents } from './smart';
 import { openBlendIf } from './blendifdialog';
 import { FX_LABELS, FX_ORDER, hasEffects } from './fx';
@@ -64,6 +65,8 @@ function slider(label: string, get: () => number, set: (v: number) => void, min:
   return wrap;
 }
 const hintEl = (text: string) => { const s = document.createElement('span'); s.style.color = 'var(--dim)'; s.textContent = text; return s; };
+let xformSync: (() => void) | null = null;
+app.on('xform', () => xformSync?.());
 export function renderOptions() {
   const el = $('options'); el.innerHTML = '';
   const t = app.toolId, b = app.brush;
@@ -138,6 +141,20 @@ export function renderOptions() {
     const ml = document.createElement('label'); const ms = document.createElement('select');
     ms.innerHTML = '<option value="free">Freehand</option><option value="poly">Polygonal</option>'; ms.value = app.lasso.mode; ms.onchange = () => (app.lasso.mode = ms.value as 'free' | 'poly'); ml.append('Mode', ms);
     el.append(ml, hintEl('Freehand: drag · Polygonal: click corners, click the first point / double-click / Enter to close, Backspace removes a point, Esc cancels · L toggles the mode · Shift = add · Alt = subtract'));
+  } else if (t === 'transform') {
+    const num = (label: string, get: () => number, set: (v: number) => void, step = 0.1) => {
+      const l = document.createElement('label'), i = document.createElement('input'); i.type = 'number'; i.step = String(step); i.style.width = '72px';
+      i.value = String(Math.round(get() * 100) / 100); i.onchange = () => { const v = Number(i.value); if (Number.isFinite(v)) set(v); };
+      l.append(label, i); return { l, i, get };
+    };
+    const w = num('W %', () => Math.abs(freeTransform.m?.sx ?? 1) * 100, (v) => freeTransform.set({ sx: Math.sign(freeTransform.m.sx || 1) * Math.max(0.01, v / 100) }));
+    const h = num('H %', () => Math.abs(freeTransform.m?.sy ?? 1) * 100, (v) => freeTransform.set({ sy: Math.sign(freeTransform.m.sy || 1) * Math.max(0.01, v / 100) }));
+    const a = num('Angle °', () => freeTransform.m?.angle ?? 0, (v) => freeTransform.set({ angle: v }));
+    const sync = () => { if (!freeTransform.active) return; for (const f of [w, h, a]) f.i.value = String(Math.round(f.get() * 100) / 100); };
+    xformSync = sync;
+    const ok = document.createElement('button'); ok.textContent = '✓ Apply'; ok.onclick = () => freeTransform.commit();
+    const no = document.createElement('button'); no.textContent = '✕ Cancel'; no.onclick = () => freeTransform.cancel();
+    el.append(w.l, h.l, a.l, ok, no, hintEl('Enter applies · Esc cancels · Shift keeps proportions / snaps rotation · Alt scales from the centre'));
   } else if (t === 'quick') {
     el.append(slider('Size', () => app.quick.size, (v) => (app.quick.size = v), 4, 300, 1, (v) => v + 'px'),
       slider('Tolerance', () => app.quick.tolerance, (v) => (app.quick.tolerance = v), 0, 255));

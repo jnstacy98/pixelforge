@@ -3,9 +3,9 @@ import type { LayerEffects } from './fx';
 import { FONTS } from './text';
 import type { Viewer } from './viewer';
 
-export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand' | 'quick' | 'clone' | 'heal' | 'spot' | 'patch' | 'cmove';
+export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand' | 'quick' | 'clone' | 'heal' | 'spot' | 'patch' | 'cmove' | 'transform';
 
-type Evt = 'tool' | 'color' | 'doc' | 'options' | 'history' | 'textstyle' | 'textsync';
+type Evt = 'tool' | 'color' | 'doc' | 'options' | 'history' | 'textstyle' | 'textsync' | 'xform';
 
 class App {
   docs: Doc[] = [];

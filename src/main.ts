@@ -12,6 +12,7 @@ import { defaultAdjustment } from './adjust';
 import { defaultFx, FX_TUNE } from './fx';
 import { composite } from './render';
 import { editor } from './texttool';
+import { freeTransform, startFreeTransform } from './freetransform';
 import { convertToSmart, editContents, isSmart, rasterizeSmart, transformSmart, updateSmart } from './smart';
 import { defineBrushTip } from './definetip';
 import { loadSavedTips } from './brushtips';
@@ -106,6 +107,7 @@ const menus: { title: string; items: () => Item[] }[] = [
       { label: h.canRedo ? `Redo ${h.redoLabel}` : 'Redo', shortcut: 'Ctrl+Shift+Z', action: () => h.redo() },
       '-',
       { label: 'Content-Aware Fill…', shortcut: 'Shift+F5', action: () => contentAwareFill() },
+      { label: 'Free Transform', shortcut: 'Ctrl+T', action: () => startFreeTransform() },
       { label: 'Define Brush Tip from Selection…', action: defineBrushTip },
       { label: 'Fill with Foreground', shortcut: 'Alt+Backspace', action: () => fillSelection(app.fg) },
       { label: 'Fill with Background', shortcut: 'Ctrl+Backspace', action: () => fillSelection(app.bg) },
@@ -252,6 +254,8 @@ window.addEventListener('keydown', (e) => {
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   const doc = app.doc;
   if (!mod && tools[app.toolId].key?.(e)) { e.preventDefault(); return; }
+  if (freeTransform.active && mod && (k === 'z' || k === 'y')) { e.preventDefault(); freeTransform.cancel(); return; }
+  if (mod && k === 't' && !e.altKey) { e.preventDefault(); startFreeTransform(); return; }
   if (mod && e.altKey && e.code === 'KeyG') { e.preventDefault(); doc.toggleClip(); return; }
   if (mod) {
     const map: Record<string, () => void> = {
@@ -395,6 +399,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const c = document.createElement('canvas'); c.width = d2.width; c.height = d2.height; const x = c.getContext('2d', { willReadFrequently: true })!; composite(d2, x);
   return { w: d2.width, h: d2.height, head: Array.from(data.slice(0, 4)), px: [[10, 10], [60, 60], [150, 150]].map(([a, b]) => Array.from(x.getImageData(a, b, 1, 1).data)) };
 };
+(window as any).__xform = freeTransform;
 (window as any).__smartApi = { isSmart, convertToSmart, editContents, updateSmart, transformSmart, rasterizeSmart };
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;

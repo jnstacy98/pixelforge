@@ -25,7 +25,7 @@ export async function decodeLinked(f: LinkedFile): Promise<HTMLCanvasElement> {
 const printOf = (l: Layer) => fingerprint(l.ctx.getImageData(0, 0, l.canvas.width, l.canvas.height).data, l.canvas.width, l.canvas.height);
 
 /** Redraw the layer's pixels from its source through its placed transform. */
-function draw(l: Layer, src: HTMLCanvasElement) {
+export function draw(l: Layer, src: HTMLCanvasElement) {
   const p = l.smart!.placed, w = p.width || src.width, h = p.height || src.height;
   const c = l.ctx;
   c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, l.canvas.width, l.canvas.height);
