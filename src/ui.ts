@@ -19,6 +19,7 @@ const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
   { id: 'heal', key: 'J', label: 'Healing Brush (Alt+click to set source)', icon: svg('<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M10 10.01h.01M10 14h.01M14 10.01h.01M14 14h.01M18 6v12M6 6v12"/>') },
   { id: 'spot', key: 'K', label: 'Spot Healing Brush', icon: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>') },
   { id: 'patch', key: 'P', label: 'Patch (draw a selection, then drag it)', icon: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M12 8v8M8 12h8"/>') },
+  { id: 'cmove', key: 'O', label: 'Content-Aware Move (draw around an object, then drag it)', icon: svg('<path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3"/><rect x="8.5" y="8.5" width="7" height="7" rx="1.5"/>') },
   { id: 'eraser', key: 'E', label: 'Eraser', icon: svg('<path d="M20 20H8l-4.6-4.6a1.4 1.4 0 010-2L13 3.8a1.4 1.4 0 012 0l5.6 5.6a1.4 1.4 0 010 2L11 21"/><path d="M7 11l6 6"/>') },
   { id: 'bucket', key: 'G', label: 'Paint Bucket', icon: svg('<path d="M19 11l-8-8-8.6 8.6a2 2 0 000 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11z"/><path d="M5 2l5 5M2 13h15"/><path d="M22 20a2 2 0 11-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4z"/>') },
   { id: 'gradient', key: 'D', label: 'Gradient', icon: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 17L17 7" stroke-dasharray="1 3"/>') },
@@ -84,6 +85,14 @@ export function renderOptions() {
     ss.innerHTML = '<option value="layer">Current layer</option><option value="below">Current &amp; below</option><option value="all">All layers</option>';
     ss.value = app.clone.sample; ss.onchange = () => (app.clone.sample = ss.value as typeof app.clone.sample); sl.append('Sample', ss);
     el.append(ml, bl, sl, hintEl('Draw around an area, then drag the selection: Source = repair it from where you drop it · Destination = copy it there'));
+  } else if (t === 'cmove') {
+    const ml = document.createElement('label'); const ms = document.createElement('select');
+    ms.innerHTML = '<option value="move">Move</option><option value="extend">Extend (copy)</option>'; ms.value = app.cmove.mode; ms.onchange = () => (app.cmove.mode = ms.value as 'move' | 'extend'); ml.append('Mode', ms);
+    const bl = document.createElement('label'); const bc = document.createElement('input'); bc.type = 'checkbox'; bc.checked = app.cmove.blend; bc.onchange = () => (app.cmove.blend = bc.checked); bl.append(bc, 'Match tone & texture');
+    const sl = document.createElement('label'); const ss = document.createElement('select');
+    ss.innerHTML = '<option value="layer">Current layer</option><option value="below">Current &amp; below</option><option value="all">All layers</option>';
+    ss.value = app.clone.sample; ss.onchange = () => (app.clone.sample = ss.value as typeof app.clone.sample); sl.append('Sample', ss);
+    el.append(ml, bl, sl, hintEl('Draw around an object, then drag it: Move = the hole it leaves is filled in automatically · Extend = a blended copy, the original stays'));
   } else if (t === 'clone' || t === 'heal') {
     el.append(slider('Size', () => b.size, (v) => (b.size = v), 1, 500, 1, (v) => v + 'px'),
       slider('Hardness', () => b.hardness, (v) => (b.hardness = v), 0, 1, 0.01, pct),

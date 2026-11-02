@@ -3,7 +3,7 @@ import type { LayerEffects } from './fx';
 import { FONTS } from './text';
 import type { Viewer } from './viewer';
 
-export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand' | 'clone' | 'heal' | 'spot' | 'patch';
+export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand' | 'clone' | 'heal' | 'spot' | 'patch' | 'cmove';
 
 type Evt = 'tool' | 'color' | 'doc' | 'options' | 'history' | 'textstyle' | 'textsync';
 
@@ -22,6 +22,7 @@ class App {
   styleClip: LayerEffects | null = null;
   clone = { src: null as { x: number; y: number } | null, offset: null as { x: number; y: number } | null, doc: null as Doc | null, w: 0, h: 0, aligned: true, sample: 'layer' as 'layer' | 'below' | 'all' };
   /** Patch tool: Source (the selection takes texture from where you drag it) or Destination (it is copied there); blend = match tone like the Healing Brush. */
+  cmove = { mode: 'move' as 'move' | 'extend', blend: true };
   patch = { mode: 'source' as 'source' | 'dest', blend: true };
   marquee = { shape: 'rect' as 'rect' | 'ellipse' };
   wand = { allLayers: false };

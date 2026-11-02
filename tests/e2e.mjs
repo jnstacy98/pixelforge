@@ -1481,6 +1481,47 @@ assert.ok(satIn.some((v) => Math.abs(v - base) > 15) && satInv.some((v) => Math.
 assert.ok(near(await rgbOf(60, 150), [255, 255, 255], 1)); ok('…without touching anything outside the shape');
 await fxOpen('Satin'); assert.match(await page.locator('.fx-controls h3').textContent(), /Satin/); await page.keyboard.press('Escape'); await wait(); ok('Satin is in the Layer Style dialog');
 
+// 6p. content-aware move / extend
+const cmScene = async (mode) => {
+  await page.evaluate((mode) => {
+    window.__blank(400, 300); const a = window.__app, d = a.doc, x = d.layers[0].ctx;
+    const img = x.createImageData(400, 300), px = img.data;
+    for (let y = 0; y < 300; y++) for (let xx = 0; xx < 400; xx++) {
+      const h = (((xx * 73856093) ^ (y * 19349663)) >>> 0) % 256, n = (h / 255 - 0.5) * 20, i = (y * 400 + xx) * 4, st = (Math.floor(xx / 20) % 2) * 30;
+      px[i] = 110 + st + n; px[i + 1] = 120 + st + n; px[i + 2] = 100 + st + n; px[i + 3] = 255;
+    }
+    x.putImageData(img, 0, 0);
+    x.fillStyle = '#d02828'; x.beginPath(); x.arc(100, 150, 16, 0, 7); x.fill();          // the object
+    d.emit('structure'); d.setSelection(null);
+    a.cmove.mode = mode; a.cmove.blend = true; a.clone.sample = 'layer'; a.setTool('cmove');
+  }, mode);
+  await wait();
+};
+const redness = (x, y) => page.evaluate(([x, y]) => { const d = window.__app.doc.layers[0].ctx.getImageData(x - 3, y - 3, 7, 7).data; let r = 0, g = 0; for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; } return (r - g) / (d.length / 4); }, [x, y]);
+const dragSel = async (from, to) => {
+  const a = await toScreen(...from), b = await toScreen(...to);
+  await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move((a.x + b.x) / 2, a.y, { steps: 5 }); await page.mouse.move(b.x, b.y, { steps: 5 }); await page.mouse.up();
+  await page.waitForFunction(() => !document.querySelector('.caf-overlay'), null, { timeout: 60000 }); await wait(); await wait();
+};
+await cmScene('move');
+assert.ok(await redness(100, 150) > 40); ok('content-aware move scene: a red object on a striped, textured background');
+await lassoAround(100, 150, 28);
+await dragSel([100, 150], [300, 150]);
+assert.ok(await redness(300, 150) > 40, `moved object at destination (redness ${await redness(300, 150)})`); ok('Content-Aware Move: the object appears at the new position');
+assert.ok(Math.abs(await redness(100, 150)) < 12, `old spot redness ${await redness(100, 150)}`); ok('…and the hole it left is filled with background (no red left behind)');
+const holeStats = await discStats(100, 150, 18); assert.ok(holeStats.sd > 3 && holeStats.min > 60, `fill sd ${holeStats.sd} min ${holeStats.min}`); ok('…with texture, not a flat smear');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Content-Aware Move');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(await redness(100, 150) > 40 && Math.abs(await redness(300, 150)) < 12); ok('one undo step puts the object back and removes the copy');
+
+await cmScene('extend');
+await lassoAround(100, 150, 28);
+await dragSel([100, 150], [300, 150]);
+assert.ok(await redness(300, 150) > 40 && await redness(100, 150) > 40); ok('Extend mode copies the object and leaves the original in place');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(Math.abs(await redness(300, 150)) < 12); ok('undo removes the extended copy');
+assert.equal(await page.evaluate(() => !!document.querySelector('[data-tool="cmove"], #tool-cmove')), true); ok('Content-Aware Move is in the toolbox');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

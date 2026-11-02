@@ -83,3 +83,19 @@ export async function contentAwareFill(opts?: FillOptions): Promise<boolean> {
     running = false;
   }
 }
+
+/** Runs a long job behind the blocking progress overlay (shared by Content-Aware Fill and Content-Aware Move). */
+export async function withFillOverlay<T>(title: string, job: (progress: (f: number) => void, cancelled: () => boolean) => Promise<T>): Promise<T> {
+  running = true;
+  const overlay = document.createElement('div');
+  overlay.className = 'caf-overlay';
+  const bar = document.createElement('div'); bar.className = 'caf-bar'; const fillBar = document.createElement('div'); bar.append(fillBar);
+  const label = document.createElement('div'); label.textContent = title;
+  let cancelled = false;
+  const cancel = document.createElement('button'); cancel.textContent = 'Cancel'; cancel.onclick = () => { cancelled = true; label.textContent = 'Cancelling…'; };
+  overlay.append(label, bar, cancel);
+  document.body.append(overlay);
+  await new Promise((r) => setTimeout(r, 30));
+  try { return await job((f) => { fillBar.style.width = `${Math.round(f * 100)}%`; }, () => cancelled); }
+  finally { overlay.remove(); running = false; }
+}
