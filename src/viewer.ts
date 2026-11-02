@@ -135,7 +135,7 @@ export class Viewer {
       for (const ce of evs.length ? evs : [e]) tools[app.toolId].move(this.pt(ce), ce);
     }
     this.onStatus();
-    if (tools[app.toolId].brushCursor) this.drawOverlay();
+    if (tools[app.toolId].brushCursor || tools[app.toolId].trackHover) this.drawOverlay();
   }
   private onUp(e: PointerEvent) {
     if ((e.target as HTMLElement).tagName === 'TEXTAREA' && !this.drawing && !this.panning) return;
@@ -184,7 +184,7 @@ export class Viewer {
     }
     tools[app.toolId].overlay?.(ctx, ts);
     if (this.mouse && tools[app.toolId].brushCursor && !this.panning && !this.spaceDown) {
-      const r = Math.max(1, (app.brush.size * this.zoom) / 2);
+      const r = Math.max(1, ((tools[app.toolId].cursorSize?.() ?? app.brush.size) * this.zoom) / 2);
       ctx.save(); ctx.lineWidth = 1;
       ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.beginPath(); ctx.arc(this.mouse.x, this.mouse.y, r, 0, Math.PI * 2); ctx.stroke();
       ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.beginPath(); ctx.arc(this.mouse.x, this.mouse.y, r + 1, 0, Math.PI * 2); ctx.stroke();

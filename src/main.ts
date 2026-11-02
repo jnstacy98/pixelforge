@@ -1,3 +1,4 @@
+import { tools } from './tools';
 import './style.css';
 import { app } from './state';
 import { Doc } from './doc';
@@ -238,6 +239,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'F5' && e.shiftKey) { e.preventDefault(); contentAwareFill(); return; }
   const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   const doc = app.doc;
+  if (!mod && tools[app.toolId].key?.(e)) { e.preventDefault(); return; }
   if (mod && e.altKey && e.code === 'KeyG') { e.preventDefault(); doc.toggleClip(); return; }
   if (mod) {
     const map: Record<string, () => void> = {
@@ -271,6 +273,7 @@ window.addEventListener('keydown', (e) => {
     renderOptions(); app.emit('options'); return;
   }
   const t = toolKeys[k];
+  if (t === 'lasso' && app.toolId === 'lasso') { app.lasso.mode = app.lasso.mode === 'free' ? 'poly' : 'free'; renderOptions(); return app.toast(`Lasso: ${app.lasso.mode === 'poly' ? 'polygonal' : 'freehand'}`); }
   if (t) app.setTool(t);
 });
 

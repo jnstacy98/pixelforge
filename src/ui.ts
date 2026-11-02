@@ -14,6 +14,7 @@ const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
   { id: 'move', key: 'V', label: 'Move', icon: svg('<path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/>') },
   { id: 'marquee', key: 'M', label: 'Rectangular Marquee', icon: svg('<rect x="4" y="4" width="16" height="16" stroke-dasharray="3 3"/>') },
   { id: 'lasso', key: 'L', label: 'Lasso', icon: svg('<path d="M7 22a5 5 0 01-2-4"/><path d="M3.3 14A6.8 6.8 0 012 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 01-5-1"/><circle cx="5" cy="19" r="2"/>') },
+  { id: 'quick', key: 'Q', label: 'Quick Selection (paint over an object)', icon: svg('<path d="M3 21l6-6"/><circle cx="15" cy="9" r="6" stroke-dasharray="3 2.5"/><path d="M9 15l3-3"/>') },
   { id: 'wand', key: 'W', label: 'Magic Wand', icon: svg('<path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8L19 13M15 9h.01M17.8 6.2L19 5M3 21l9-9M12.2 6.2L11 5"/>') },
   { id: 'brush', key: 'B', label: 'Brush', icon: svg('<path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 114.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 00-3-3.02z"/>') },
   { id: 'clone', key: 'S', label: 'Clone Stamp (Alt+click to set source)', icon: svg('<path d="M5 22h14"/><path d="M19.27 13.73A2.5 2.5 0 0017.5 13h-11A2.5 2.5 0 004 15.5V17a1 1 0 001 1h14a1 1 0 001-1v-1.5c0-.66-.26-1.3-.73-1.77z"/><path d="M14 13V8.5C14 7 15 7 15 5a3 3 0 00-3-3c-1.66 0-3 1-3 3s1 2 1 3.5V13"/>') },
@@ -121,7 +122,14 @@ export function renderOptions() {
     s.value = app.marquee.shape; s.onchange = () => (app.marquee.shape = s.value as 'rect' | 'ellipse'); l.append('Shape', s);
     el.append(l, hintEl('Shift = add · Alt = subtract · Shift+Alt = intersect'));
   } else if (t === 'lasso') {
-    el.append(hintEl('Drag to draw a freehand selection · Shift = add · Alt = subtract · Shift+Alt = intersect'));
+    const ml = document.createElement('label'); const ms = document.createElement('select');
+    ms.innerHTML = '<option value="free">Freehand</option><option value="poly">Polygonal</option>'; ms.value = app.lasso.mode; ms.onchange = () => (app.lasso.mode = ms.value as 'free' | 'poly'); ml.append('Mode', ms);
+    el.append(ml, hintEl('Freehand: drag · Polygonal: click corners, click the first point / double-click / Enter to close, Backspace removes a point, Esc cancels · L toggles the mode · Shift = add · Alt = subtract'));
+  } else if (t === 'quick') {
+    el.append(slider('Size', () => app.quick.size, (v) => (app.quick.size = v), 4, 300, 1, (v) => v + 'px'),
+      slider('Tolerance', () => app.quick.tolerance, (v) => (app.quick.tolerance = v), 0, 255));
+    const l = document.createElement('label'); const c = document.createElement('input'); c.type = 'checkbox'; c.checked = app.wand.allLayers; c.onchange = () => (app.wand.allLayers = c.checked); l.append(c, 'Sample all layers');
+    el.append(l, hintEl('Paint over an object: the selection grows along colour edges · Shift = add · Alt = subtract · later strokes add automatically'));
   } else if (t === 'wand') {
     el.append(slider('Tolerance', () => app.fill.tolerance, (v) => (app.fill.tolerance = v), 0, 255));
     const mk = (label: string, get: () => boolean, set: (v: boolean) => void) => {

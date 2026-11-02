@@ -1602,6 +1602,57 @@ await fxOK();
 const prt = await page.evaluate((id) => window.__patternRoundtrip(id), userPat.id);
 assert.ok(prt.had && prt.same && prt.fx.id === userPat.id, JSON.stringify(prt)); assert.equal(prt.notes.length, 0); ok('PSD round-trip: the pattern tile travels inside the file with the Pattern Overlay');
 
+// 6s. polygonal lasso
+await page.evaluate(() => { window.__blank(400, 300); const a = window.__app; a.doc.setSelection(null); a.lasso.mode = 'poly'; a.setTool('lasso'); });
+await wait();
+const polyClick = async (x, y) => { const q = await toScreen(x, y); await page.mouse.click(q.x, q.y); await page.waitForTimeout(400); };
+for (const [x, y] of [[100, 100], [220, 110], [260, 220], [120, 200]]) await polyClick(x, y);
+assert.equal(await page.evaluate(() => !!window.__app.doc.selection), false); ok('polygonal lasso: clicking corners does not select until the shape is closed');
+await polyClick(101, 101);
+const ps = await page.evaluate(() => ({ ...window.__app.doc.selection, irregular: !!window.__app.doc.selMask }));
+assert.ok(Math.abs(ps.x - 100) <= 2 && Math.abs(ps.y - 100) <= 2 && Math.abs(ps.w - 160) <= 3 && Math.abs(ps.h - 120) <= 3 && ps.irregular, JSON.stringify(ps)); ok('…clicking the first point closes it into a polygon selection');
+const inPoly = await page.evaluate(() => { const m = window.__app.doc.selMask.getContext('2d').getImageData(0, 0, 400, 300).data; const at = (x, y) => m[(y * 400 + x) * 4 + 3] > 127; return [at(170, 160), at(250, 105), at(130, 195)]; });
+assert.deepEqual(inPoly, [true, false, true]); ok('the selection follows the polygon edges (a straight diagonal, not a bounding box)');
+await page.evaluate(() => window.__app.doc.setSelection(null));
+for (const [x, y] of [[50, 50], [150, 50], [150, 150]]) await polyClick(x, y);
+await page.keyboard.press('Backspace'); await page.keyboard.press('Enter'); await wait();
+assert.equal(await page.evaluate(() => !!window.__app.doc.selection), false); ok('Backspace removes the last point (two points are too few to select)');
+for (const [x, y] of [[50, 50], [150, 50], [150, 150]]) await polyClick(x, y);
+await page.keyboard.press('Enter'); await wait();
+assert.ok(await page.evaluate(() => { const s = window.__app.doc.selection; return !!s && s.w > 90; })); ok('Enter closes the polygon');
+await page.evaluate(() => window.__app.doc.setSelection(null));
+for (const [x, y] of [[50, 50], [150, 50]]) await polyClick(x, y);
+await page.keyboard.press('Escape'); await polyClick(300, 250); await polyClick(350, 250);
+await page.keyboard.press('Enter'); await wait();
+assert.equal(await page.evaluate(() => !!window.__app.doc.selection), false); ok('Esc cancels the polygon in progress');
+await page.evaluate(() => { window.__app.lasso.mode = 'free'; });
+
+// 6t. quick selection
+await page.evaluate(() => {
+  window.__blank(400, 300); const a = window.__app, d = a.doc, x = d.layers[0].ctx;
+  x.fillStyle = '#2040c0'; x.fillRect(0, 0, 400, 300); x.fillStyle = '#d03020'; x.fillRect(100, 100, 200, 100); d.emit('structure'); d.setSelection(null);
+  a.quick.size = 50; a.quick.tolerance = 40; a.wand.allLayers = false; a.setTool('quick');
+});
+await wait();
+const qDrag = async (pts, key) => {
+  const sp = await Promise.all(pts.map((q) => toScreen(...q)));
+  if (key) await page.keyboard.down(key);
+  await page.mouse.move(sp[0].x, sp[0].y); await page.mouse.down();
+  for (const q of sp.slice(1)) await page.mouse.move(q.x, q.y, { steps: 4 });
+  await page.mouse.up(); if (key) await page.keyboard.up(key); await wait();
+};
+const selAt = (pts) => page.evaluate((pts) => { const d = window.__app.doc; if (!d.selection) return pts.map(() => false); if (!d.selMask) { const r = d.selection; return pts.map(([x, y]) => x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h); } const m = d.selMask.getContext('2d').getImageData(0, 0, 400, 300).data; return pts.map(([x, y]) => m[(y * 400 + x) * 4 + 3] > 127); }, pts);
+await qDrag([[130, 130], [270, 170]]);
+assert.deepEqual(await selAt([[105, 105], [295, 195], [200, 150], [95, 150], [305, 150], [200, 95], [200, 205]]), [true, true, true, false, false, false, false]); ok('Quick Selection: a short stroke selects the whole red rectangle, stopping at its colour edges');
+const qb = await page.evaluate(() => ({ ...window.__app.doc.selection })); assert.ok(Math.abs(qb.x - 100) <= 1 && Math.abs(qb.w - 200) <= 2 && Math.abs(qb.h - 100) <= 2, JSON.stringify(qb)); ok('…with exact bounds');
+await qDrag([[50, 250], [80, 270]]);
+assert.deepEqual(await selAt([[65, 260], [200, 150]]), [true, true]); ok('a later stroke adds to the selection (the blue corner joins the red rectangle)');
+await qDrag([[230, 130], [270, 170]], 'Alt');
+assert.deepEqual(await selAt([[250, 150], [105, 105]]), [false, true]); ok('Alt-drag subtracts the region under the brush');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual(await selAt([[250, 150]]), [true]); ok('undo restores the previous selection');
+await page.evaluate(() => window.__app.doc.setSelection(null));
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

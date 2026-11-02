@@ -1,6 +1,6 @@
 import { app, hexToRgb, rgbToHex, paintColor, grayOf, type ToolId } from './state';
 import { TextTool } from './texttool';
-import { MarqueeTool, LassoTool, WandTool } from './selecttools';
+import { MarqueeTool, LassoTool, WandTool, QuickSelectTool } from './selecttools';
 import { clipToSelection, selectedFlags } from './selection';
 import { floodSelect } from './flood';
 import { chooseSpotOffset, healPatch } from './heal';
@@ -17,6 +17,12 @@ export interface Tool {
   up(p: Pt, e: PointerEvent): void;
   overlay?(ctx: CanvasRenderingContext2D, toScreen: (x: number, y: number) => [number, number]): void;
   brushCursor?: boolean;
+  /** Redraw the overlay on every mouse move (rubber-band previews). */
+  trackHover?: boolean;
+  /** Diameter (doc px) of the circle drawn at the cursor when `brushCursor` is set; defaults to the brush size. */
+  cursorSize?(): number;
+  /** Keyboard hook while this tool is active; return true if handled. */
+  key?(e: KeyboardEvent): boolean;
 }
 
 // ---------------------------------------------------------------- brush stamps
@@ -416,5 +422,5 @@ class HandTool implements Tool { cursor = 'grab'; down() {} move() {} up() {} }
 
 export const tools: Record<ToolId, Tool> = {
   move: new MoveTool(), marquee: new MarqueeTool(), brush: new PaintTool('brush'), eraser: new PaintTool('eraser'),
-  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), clone: new PaintTool('clone'), heal: new PaintTool('heal'), spot: new PaintTool('spot'), patch: new PatchTool(), cmove: new ContentMoveTool(),
+  bucket: new BucketTool(), gradient: new GradientTool(), eyedropper: new EyedropperTool(), hand: new HandTool(), text: new TextTool(), lasso: new LassoTool(), wand: new WandTool(), quick: new QuickSelectTool(), clone: new PaintTool('clone'), heal: new PaintTool('heal'), spot: new PaintTool('spot'), patch: new PatchTool(), cmove: new ContentMoveTool(),
 };

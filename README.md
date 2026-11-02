@@ -15,7 +15,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 | **Healing** | **Healing Brush** (`J`): like the Clone Stamp (Alt+click source, aligned, sample layer / below / all), but when you release, the patch keeps the source's *texture* and takes its colour and lighting from the surroundings — blemishes vanish without a ghost or seam. **Spot Healing** (`K`): just paint over a blemish; PixelForge searches nearby areas for the one whose surroundings match best and heals from it. Seamless membrane blending (push-pull pyramid + relaxation), one undo step per stroke, works with selections. |
 | **Brush & eraser** | Size, hardness, opacity, flow, spacing; pen-pressure sensitivity; stroke-level opacity like Photoshop. `[` / `]` resize. |
 | **Tools** | Move, rectangular marquee, brush, eraser, paint bucket (tolerance/contiguous), gradient, eyedropper, hand. |
-| **Selection** | Rectangle & ellipse marquee, freehand lasso, magic wand (tolerance, contiguous, sample all layers). **Shift** adds, **Alt** subtracts, **Shift+Alt** intersects. Select ▸ All / Deselect / Inverse (`Ctrl+Shift+I`) / Feather. Irregular selections limit brush, eraser, bucket, gradient, fills, filters and move, and can become a layer mask. Selection changes are undoable. |
+| **Selection** | Rectangle & ellipse marquee, freehand **and polygonal lasso** (press `L` again to switch; click corners, click the first point / double-click / Enter to close, Backspace removes a point, Esc cancels), **Quick Selection** (`Q`: paint over an object and the selection grows along colour edges), magic wand (tolerance, contiguous, sample all layers). **Shift** adds, **Alt** subtracts, **Shift+Alt** intersects. Select ▸ All / Deselect / Inverse (`Ctrl+Shift+I`) / Feather. Irregular selections limit brush, eraser, bucket, gradient, fills, filters and move, and can become a layer mask. Selection changes are undoable. |
 | **Image** | Image size, canvas size, rotate 90°, flip H/V. |
 | **Patch tool** | `P`: draw a freehand selection around a blemish / object (or use any existing selection), then drag it. **Source** mode repairs the selected area with the texture of the area you drag the outline onto; **Content-Aware** mode builds brand-new content for the area (sampling mainly from where you drop the outline); **Destination** mode copies the selected content to where you drop it (the selection travels with it). You see a live preview while dragging; on release the patch is blended so its tone and lighting match its surroundings (same boundary-matching maths as the Healing Brush), or switch off *Match tone & texture* for a plain copy. Shift/Alt add/subtract when drawing; sample from the current layer, current & below, or all layers; one undo step. |
 | **Content-Aware Move** | `O`: draw around an object and drag it. **Move** mode drops it at the new place (tone and lighting matched to its surroundings) and fills the hole it left with Content-Aware Fill, all as one undo step; **Extend** mode leaves the original and adds a blended copy (handy for repeating or lengthening things). A progress overlay with Cancel shows while the hole is filled. |
@@ -31,6 +31,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 ### Known limitations
 - Layers are document-sized (pixels moved off-canvas are cropped).
 - PSD: smart-object editing and layer effects are not preserved. Non-`.cube` Color Lookup tables and noise-type Gradient Maps open as hidden placeholders with a warning. Brightness/Contrast and Hue/Saturation use PixelForge's own formulas, so they look *similar* but not identical to Photoshop's. Hue/Saturation's per-colour ranges and Lightness are ignored.
+- Quick Selection: a colour-similarity flood within three brush radii of each stamp (no edge-detection or auto-enhance), so low-contrast edges may leak — lower the tolerance or the brush size.
 - Blend If: only pixel/text layers (not groups or adjustment layers); sliders are judged against the composite beneath the layer at its own stack position; merging a layer down does not bake its Blend If; Photoshop's Alt-drag half-slider UI is replaced by four separate sliders.
 - Content-Aware Move: no rotate/scale of the moved object, no "Structure"/"Color" sliders, and Extend is a blended copy rather than Photoshop's structure-adaptive stretch. The hole is filled at "Fast" quality and the move only fills from the sampled layer(s) you choose.
 - Patch tool: Content-Aware mode fills at Fast quality and only uses the dropped area as a sampling hint (the fill may also draw on the surrounding crop); no "Transparent"/diffusion options; the preview while dragging is an unblended copy (the blend happens on release, as in the Healing Brush). Dragging inside the current selection moves the patch; anything outside it starts a new selection.
@@ -48,7 +49,7 @@ A Photoshop-inspired desktop image editor built with Electron + TypeScript. Open
 - `npm run test:psd` — **fidelity against real Photoshop files**: downloads 16 genuine PSDs (from the MIT-licensed `ag-psd` repo; not stored here), imports each with PixelForge, renders it, and compares with the flattened preview Photoshop saved inside the file. Each file has an error budget in `tests/psd-budgets.json`, so a change that makes Photoshop fidelity worse fails. Run it on your own PSDs with `node tests/real-psd.mjs <folder> --images <outdir>` (writes side-by-side PNGs: yours | Photoshop's).
 
 ## Shortcuts
-`V` move · `M` marquee · `L` lasso · `W` magic wand · `B` brush · `S` clone stamp · `J` healing brush · `P` patch · `K` spot healing · `E` eraser · `G` bucket · `D` gradient · `T` text · `I` eyedropper · `H` hand · `X` swap colors · `[` `]` brush size
+`V` move · `M` marquee · `L` lasso (again: freehand ⇄ polygonal) · `Q` quick selection · `W` magic wand · `B` brush · `S` clone stamp · `J` healing brush · `P` patch · `K` spot healing · `E` eraser · `G` bucket · `D` gradient · `T` text · `I` eyedropper · `H` hand · `X` swap colors · `[` `]` brush size
 `Ctrl+N/O/S` new/open/save PSD · `Ctrl+Shift+S` export PNG · `Ctrl+Z` / `Ctrl+Shift+Z` undo/redo · `Ctrl+J` duplicate layer · `Ctrl+G` / `Ctrl+Shift+G` group / ungroup · `Ctrl+Alt+G` clipping mask · `Shift+F5` content-aware fill · `Ctrl+E` merge down · `Ctrl+A/D` select all/none · `Ctrl+L` levels · `Ctrl+M` curves · `Ctrl+Shift+L` auto levels · `Ctrl+I` invert · `Ctrl+0/1` fit/100% · `Space`+drag pan
 
 ## Development
@@ -64,7 +65,7 @@ npm run dist:win    # Windows installer + portable exe (electron-builder)
 ```
 
 ## Roadmap
-Adjustment-layer blend modes, polygonal lasso, quick selection, custom brush tips, tablet tilt, TIFF support.
+Adjustment-layer blend modes, custom brush tips, tablet tilt, TIFF support.
 
 ## License
 MIT

@@ -3,7 +3,7 @@ import type { LayerEffects } from './fx';
 import { FONTS } from './text';
 import type { Viewer } from './viewer';
 
-export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand' | 'clone' | 'heal' | 'spot' | 'patch' | 'cmove';
+export type ToolId = 'move' | 'marquee' | 'brush' | 'eraser' | 'bucket' | 'gradient' | 'eyedropper' | 'hand' | 'text' | 'lasso' | 'wand' | 'quick' | 'clone' | 'heal' | 'spot' | 'patch' | 'cmove';
 
 type Evt = 'tool' | 'color' | 'doc' | 'options' | 'history' | 'textstyle' | 'textsync';
 
@@ -25,6 +25,8 @@ class App {
   cmove = { mode: 'move' as 'move' | 'extend', blend: true };
   patch = { mode: 'source' as 'source' | 'dest' | 'content', blend: true };
   marquee = { shape: 'rect' as 'rect' | 'ellipse' };
+  lasso = { mode: 'free' as 'free' | 'poly' };
+  quick = { size: 40, tolerance: 32 };
   wand = { allLayers: false };
   gradient = { mode: 'fg-bg' as 'fg-bg' | 'fg-transparent' };
   private subs = new Map<Evt, Set<() => void>>();
