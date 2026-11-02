@@ -196,6 +196,35 @@ t('vector shapes: geometry, bounds, transforms, drag modifiers, paths, decompose
   const cl = SH.cloneShape(poly); cl.pts[0][0] = 99; cl.T[4] = 99; assert.equal(poly.pts[0][0], 0); assert.equal(poly.T[4], 10);
 });
 
+t('bezier paths: curve commands, control-hull bounds, smoothing, inserting anchors, nearest point, inverse matrix', () => {
+  const near1 = (a, b, e = 1e-9) => a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) < e);
+  const curves = [{ i: [0, 0], o: [20, -40] }, { i: [-20, -40], o: [0, 0] }];
+  const p = SH.shapeFromPoints([[100, 100], [200, 100]], false, {}, curves);
+  assert.deepEqual(SH.shapeCmds(p), [['M', 100, 100], ['C', 120, 60, 180, 60, 200, 100]]);                                       // two handles → one cubic
+  assert.deepEqual([p.w, p.h, p.T[4], p.T[5]], [100, 40, 100, 60]);                                                                // the box includes the control points (y 60…100)
+  assert.deepEqual(SH.shapeCmds(SH.shapeFromPoints([[0, 0], [10, 0], [10, 10]], true))[1], ['L', 10, 0]);                         // no handles → straight lines
+  const half = SH.shapeFromPoints([[0, 0], [100, 0], [100, 100]], false, {}, [{ i: [0, 0], o: [30, 0] }, null, null]); assert.equal(SH.shapeCmds(half)[1][0], 'C'); assert.equal(SH.shapeCmds(half)[2][0], 'L');   // one handle is enough
+  const closed = SH.shapeFromPoints([[0, 0], [100, 0], [50, 80]], true, {}, [null, null, { i: [0, 0], o: [-10, -30] }]);
+  const cc = SH.shapeCmds(closed); assert.equal(cc.at(-2)[0], 'C'); assert.equal(cc.at(-1)[0], 'Z');                                // the closing segment can curve too
+  const tr = SH.transformShape(p, [2, 0, 0, 2, 0, 0]); assert.deepEqual(SH.shapeCmds(tr)[1], ['C', 240, 120, 360, 120, 400, 200]);  // handles scale with the matrix
+  const sm = SH.autoSmooth([[0, 0], [100, 0], [200, 0]], 1, false); assert.ok(near1([...sm.i, ...sm.o], [-100 / 3, 0, 100 / 3, 0], 1e-9));
+  const end = SH.autoSmooth([[0, 0], [90, 0]], 0, false); assert.ok(Math.abs(end.o[0]) <= 90 / 3 + 1e-9);                          // endpoints don't blow up
+  // inserting an anchor keeps the curve exactly where it was
+  const base = SH.shapeFromPoints([[0, 0], [100, 0]], false, {}, [{ i: [0, 0], o: [0, 50] }, { i: [0, 50], o: [0, 0] }]);
+  const ins = SH.insertAnchor(base.pts, base.curves, 0, 0.5, false); assert.equal(ins.pts.length, 3); assert.ok(near1(ins.pts[1], [50, 37.5]));
+  const before = (u) => { const t = u, o = 1 - t; return [o * o * o * 0 + 3 * o * o * t * 0 + 3 * o * t * t * 100 + t * t * t * 100, 3 * o * o * t * 50 + 3 * o * t * t * 50]; };
+  const mid = before(0.5); assert.ok(near1(mid, [50, 37.5]));
+  const strip = SH.insertAnchor([[0, 0], [100, 0]], [null, null], 0, 0.25, false); assert.deepEqual(strip.pts[1], [25, 0]); assert.deepEqual(strip.curves, [null, null, null]);
+  const loop = SH.insertAnchor([[0, 0], [100, 0], [50, 80]], [null, null, null], 2, 0.5, true); assert.deepEqual(loop.pts[3], [25, 40]);   // the closing segment appends at the end
+  const near = SH.nearestOnPath(SH.shapeFromPoints([[0, 0], [100, 0]], false), 50, 7); assert.ok(near.d > 6.9 && near.d < 7.1 && near.seg === 0);
+  assert.equal(SH.nearestOnPath(SH.makeShape('rect', 10, 10, 0, 0), 1, 1), null);
+  const inv = SH.invertMat([2, 0, 0, 4, 10, 20]); assert.deepEqual(inv, [0.5, 0, 0, 0.25, -5, -5]); assert.equal(SH.invertMat([1, 2, 2, 4, 0, 0]), null);
+  const moved = SH.cloneShape(p); moved.pts[1] = [-50, 120]; moved.curves[0].o = [0, -80];                                       // an edited path: points left/above the old box
+  const nz = SH.normalizePath(moved); assert.ok(nz.pts.every(([x, y]) => x >= -1e-9 && y >= -1e-9) && Math.min(...nz.pts.map((q) => q[0])) < 1e-9);
+  const cmdsA = SH.shapeCmds(moved), cmdsB = SH.shapeCmds(nz); assert.ok(cmdsA.every((c, i) => c.slice(1).every((v, k) => Math.abs(v - cmdsB[i][k + 1]) < 1e-9)));   // nothing moves on screen
+  const cl = SH.cloneShape(p); cl.curves[0].o[0] = 999; assert.equal(p.curves[0].o[0], 20);
+});
+
 // ---- smart objects
 import * as SM from '../src/smartmath.ts';
 t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {

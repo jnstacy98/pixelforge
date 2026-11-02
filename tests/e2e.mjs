@@ -1940,6 +1940,45 @@ assert.ok(await topShape()); ok('…and undo restores the vector data');
 await page.evaluate(() => window.__app.doc.duplicateLayer()); await wait();
 assert.equal(await page.evaluate(() => window.__app.doc.layers.filter((l) => l.shape).length), 2); ok('duplicating a shape layer duplicates its vector data');
 
+// 6ab. bezier pen
+await shScene('path', { useFill: false, useStroke: true, stroke: '#ff0000', strokeW: 6 });
+{ const a = await toScreen(100, 200), b = await toScreen(160, 140); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 5 }); await page.mouse.up(); await page.waitForTimeout(400); }
+{ const q = await toScreen(250, 200); await page.mouse.click(q.x, q.y); await page.waitForTimeout(400); }
+await page.keyboard.press('Enter'); await wait();
+let bz = await topShape();
+assert.ok(bz && bz.kind === 'path' && !bz.closed && bz.pts.length === 2 && bz.curves && bz.curves[0] && bz.curves[1] === null); ok('Pen: click-dragging pulls out Bézier handles; a plain click makes a corner point');
+assert.ok(near(bz.curves[0].o, [60, -60], 1) && near(bz.curves[0].i, [-60, 60], 1)); ok('…the handles are symmetric (out = drag vector, in = its opposite)');
+assert.deepEqual((await shPx(198, 177)).slice(0, 3), [255, 0, 0]); assert.equal((await shPx(175, 200))[3], 0); ok('the path renders as a curve (the straight chord stays empty)');
+const sPos = (k) => page.evaluate((k) => { const l = [...window.__app.doc.layers].reverse().find((x) => x.shape), s = l.shape, p = s.pts[k]; return [s.T[0] * p[0] + s.T[2] * p[1] + s.T[4], s.T[1] * p[0] + s.T[3] * p[1] + s.T[5]]; }, k);
+// Ctrl+click on the segment adds an anchor exactly on the curve
+{ const q = await toScreen(198, 177); await page.keyboard.down('Control'); await page.mouse.click(q.x, q.y); await page.keyboard.up('Control'); await wait(); }
+bz = await topShape(); assert.equal(bz.pts.length, 3); assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Add Anchor');
+assert.deepEqual((await shPx(198, 177)).slice(0, 3), [255, 0, 0]); ok('Ctrl+click on a segment inserts an anchor without changing the curve');
+// select that anchor and delete it
+{ const [x, y] = await sPos(1), q = await toScreen(x, y); await page.mouse.click(q.x, q.y); await wait(); }
+await page.keyboard.press('Delete'); await wait();
+bz = await topShape(); assert.equal(bz.pts.length, 2); assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Delete Anchor'); ok('selecting an anchor and pressing Delete removes it');
+await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z'); await wait();       // back to the original two-anchor curve
+bz = await topShape(); assert.ok(bz.pts.length === 2 && near(bz.curves[0].o, [60, -60], 1));
+// drag the out-handle of the first anchor
+{ const [ax, ay] = await sPos(0), a = await toScreen(ax + 60, ay - 60), b = await toScreen(ax + 60, ay - 100); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 5 }); await page.mouse.up(); await wait(); }
+bz = await topShape(); assert.ok(near(bz.curves[0].o, [60, -100], 1.5) && near(bz.curves[0].i, [-43.66, 72.76], 2), JSON.stringify(bz.curves)); assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Edit Path'); ok('dragging a handle reshapes the curve (one “Edit Path” undo step) and keeps the opposite handle collinear');
+await page.keyboard.press('Control+z'); await wait();
+bz = await topShape(); assert.ok(near(bz.curves[0].o, [60, -60], 1)); ok('…and undoes');
+// drag an anchor
+{ const [bx, by] = await sPos(1), a = await toScreen(bx, by), b = await toScreen(bx + 30, by - 20); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 5 }); await page.mouse.up(); await wait(); }
+{ const [bx, by] = await sPos(1); assert.ok(near([bx, by], [280, 180], 1.5), `${bx},${by}`); } ok('dragging an anchor moves it (the shape box re-fits automatically)');
+await page.keyboard.press('Control+z'); await wait();
+// Alt-click converts corner ⇄ smooth
+{ const [bx, by] = await sPos(1), q = await toScreen(bx, by); await page.keyboard.down('Alt'); await page.mouse.click(q.x, q.y); await page.keyboard.up('Alt'); await wait(); }
+bz = await topShape(); assert.ok(bz.curves[1] && (bz.curves[1].o[0] !== 0 || bz.curves[1].o[1] !== 0)); assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Convert Anchor'); ok('Alt+click turns a corner anchor into a smooth one (handles appear)');
+{ const [bx, by] = await sPos(1), q = await toScreen(bx, by); await page.keyboard.down('Alt'); await page.mouse.click(q.x, q.y); await page.keyboard.up('Alt'); await wait(); }
+bz = await topShape(); assert.ok(!bz.curves[1]); ok('…and Alt+click again makes it a corner again');
+// the curved path survives moving and Free Transform
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+await page.evaluate(() => window.__xform.set({ sx: 2, sy: 2 })); await page.keyboard.press('Enter'); await wait();
+bz = await topShape(); assert.ok(Math.abs(bz.T[0] - 2) < 1e-6 && bz.curves[0]); ok('Free Transform scales a curved path through its matrix (handles included)');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');
