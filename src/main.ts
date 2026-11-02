@@ -12,6 +12,7 @@ import { defaultAdjustment } from './adjust';
 import { defaultFx, FX_TUNE } from './fx';
 import { composite } from './render';
 import { editor } from './texttool';
+import { convertToSmart, editContents, isSmart, rasterizeSmart, transformSmart, updateSmart } from './smart';
 import { defineBrushTip } from './definetip';
 import { loadSavedTips } from './brushtips';
 import { openBlendIf } from './blendifdialog';
@@ -160,6 +161,13 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Paste Layer Style', action: pasteStyle },
     { label: 'Clear Layer Style', action: clearStyle },
     '-',
+    ...(app.doc.active.smart ? [
+      { label: 'Smart Object: Edit Contents', action: () => editContents(app.doc, app.doc.active, (d) => addDoc(d)) },
+      { label: 'Smart Object: Transform…', action: () => transformSmart(app.doc, app.doc.active) },
+      { label: 'Rasterize Layer', action: () => rasterizeSmart(app.doc, app.doc.active) },
+    ] : [{ label: 'Convert to Smart Object', action: () => convertToSmart(app.doc, app.doc.active) }]),
+    ...(app.doc.smartSource ? [{ label: 'Update Smart Object', action: () => updateSmart(app.doc, (d) => switchTo(app.docs.indexOf(d))) }] : []),
+    '-',
     { label: 'New Group', action: () => app.doc.newGroup() },
     { label: 'Group Layers', shortcut: 'Ctrl+G', action: () => app.doc.groupLayers() },
     { label: 'Ungroup Layers', shortcut: 'Ctrl+Shift+G', action: () => app.doc.ungroup(app.doc.active.isGroup ? app.doc.active : app.doc.active.parent ?? app.doc.active) },
@@ -304,6 +312,8 @@ initToolbar(); initPanels(); initStatus(); initMenus();
 app.on('tool', renderOptions); renderOptions();
 app.on('history', refresh);
 window.native?.onOpenPath?.((f) => openFiles([{ name: f.name, path: f.path, data: f.data.buffer.slice(f.data.byteOffset, f.data.byteOffset + f.data.byteLength) as ArrayBuffer }]));
+app.openDoc = addDoc;
+app.showDoc = (d) => switchTo(app.docs.indexOf(d));
 addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
 (window as any).__app = app; // handy for debugging & tests
 
@@ -338,7 +348,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const { encode, importFile } = await import('./io');
   const data = await encode(app.doc, 'psd');
   const d2 = await importFile({ name: 'adj.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
-  return { layers: d2.layers.map((l) => ({ name: l.name, adj: l.adjustment, opacity: l.opacity, blend: l.blend, visible: l.visible, hasMask: !!l.mask, blendIf: l.blendIf })), notes: d2.notes };
+  return { linked: d2.linked.length, layers: d2.layers.map((l) => ({ name: l.name, smart: l.smart && { id: l.smart.placed.id, transform: l.smart.placed.transform }, adj: l.adjustment, opacity: l.opacity, blend: l.blend, visible: l.visible, hasMask: !!l.mask, blendIf: l.blendIf })), notes: d2.notes };
 };
 (window as any).__defaultAdj = defaultAdjustment;
 (window as any).__composite = (d: Doc, ctx: CanvasRenderingContext2D) => composite(d, ctx);
@@ -374,7 +384,9 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
   const d = await importFile({ name, data: u.buffer });
   const px = (l: Doc["layers"][number], x: number, y: number) => Array.from(l.ctx.getImageData(x, y, 1, 1).data);
-  return { w: d.width, h: d.height, name: d.name, layers: d.layers.map((l) => ({ name: l.name, visible: l.visible, p00: px(l, 0, 0), pEnd: px(l, Math.min(d.width, 16) - 1, Math.min(d.height, 12) - 1) })) };
+  const { encode } = await import('./io');
+  const re = /\.ps[db]$/i.test(name) ? await (async () => { const e = await encode(d, 'psd'); const d2 = await importFile({ name: 'again.psd', data: e.buffer.slice(e.byteOffset, e.byteOffset + e.byteLength) as ArrayBuffer }); return { smart: d2.layers.filter((l) => l.smart).length, linked: d2.linked.length }; })() : null;
+  return { w: d.width, h: d.height, name: d.name, smart: d.layers.filter((l) => l.smart).length, linked: d.linked.length, re, layers: d.layers.map((l) => ({ name: l.name, visible: l.visible, p00: px(l, 0, 0), pEnd: px(l, Math.min(d.width, 16) - 1, Math.min(d.height, 12) - 1) })) };
 };
 (window as any).__tiffRoundtrip = async () => {
   const { encode, importFile } = await import('./io');
@@ -383,6 +395,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const c = document.createElement('canvas'); c.width = d2.width; c.height = d2.height; const x = c.getContext('2d', { willReadFrequently: true })!; composite(d2, x);
   return { w: d2.width, h: d2.height, head: Array.from(data.slice(0, 4)), px: [[10, 10], [60, 60], [150, 150]].map(([a, b]) => Array.from(x.getImageData(a, b, 1, 1).data)) };
 };
+(window as any).__smartApi = { isSmart, convertToSmart, editContents, updateSmart, transformSmart, rasterizeSmart };
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;
 

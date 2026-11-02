@@ -119,6 +119,22 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.equal(P.fromPsdAdjustment({ type: 'color lookup' }), null);
 });
 
+// ---- smart objects
+import * as SM from '../src/smartmath.ts';
+t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {
+  const q = SM.quadAt(10, 20, 100, 50);
+  assert.deepEqual(SM.affineFromQuad(q, 100, 50), [1, 0, 0, 1, 10, 20]);
+  const d = SM.scaleQuad(q, 2, 2, 0); assert.deepEqual(d, [-40, -5, 160, -5, 160, 95, -40, 95]);                       // doubled about the centre (60, 45)
+  const r = SM.scaleQuad(q, 1, 1, 90); assert.ok(Math.abs(r[0] - 85) < 1e-9 && Math.abs(r[1] + 5) < 1e-9);           // 90° about the centre: TL goes to the top-right
+  const inf = SM.quadInfo(SM.scaleQuad(q, 1.5, 0.5, 30), 100, 50); assert.ok(Math.abs(inf.sx - 1.5) < 1e-9 && Math.abs(inf.sy - 0.5) < 1e-9 && Math.abs(inf.rot - 30) < 1e-9);
+  const rs = SM.resizeSource(q, 100, 50, 200, 100); assert.deepEqual(rs, [-40, -5, 160, -5, 160, 95, -40, 95]);        // source got 2× bigger at the same per-pixel scale
+  assert.deepEqual(SM.resizeSource(q, 100, 50, 100, 50), q);
+  const a = new Uint8ClampedArray(64).map((_, i) => i), b = a.slice(); b[17] ^= 1;
+  assert.equal(SM.fingerprint(a, 4, 4), SM.fingerprint(a.slice(), 4, 4)); assert.notEqual(SM.fingerprint(a, 4, 4), SM.fingerprint(b, 4, 4)); assert.notEqual(SM.fingerprint(a, 4, 4), SM.fingerprint(a, 2, 8));
+  assert.match(SM.newLinkId(), /^[0-9a-f]{8}-([0-9a-f]{4}-){3}[0-9a-f]{12}$/);
+  const s = { print: 'x', placed: { id: 'i', transform: [1, 2, 3, 4, 5, 6, 7, 8], type: 'raster' } }, c = SM.cloneSmart(s); c.placed.transform[0] = 99; assert.equal(s.placed.transform[0], 1);
+});
+
 // ---- pen tilt
 import * as TL from '../src/tilt.ts';
 t('pen tilt: upright is round; leaning stretches the dab along the lean direction', () => {

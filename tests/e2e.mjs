@@ -1740,6 +1740,48 @@ assert.equal(await redAt(100, 215), true); assert.equal(await redAt(115, 200), f
 await page.evaluate(() => { window.__app.brush.tilt = false; }); await penStroke(250, 200, 60, 0); await wait();
 assert.equal(await redAt(250, 200), true); assert.equal(await redAt(265, 200), false); ok('with "Pen tilt" switched off the dab stays round');
 
+// 6y. smart objects
+const smartScene = async () => {
+  await page.evaluate(() => { window.__blank(400, 300); const d = window.__app.doc, l = d.layers[0]; l.ctx.clearRect(0, 0, 400, 300); l.ctx.fillStyle = '#d02020'; l.ctx.fillRect(100, 100, 80, 60); d.emit('structure'); });
+  await wait();
+};
+const doSmart = async (fn, ...a) => { await page.evaluate(([fn, a]) => { const d = window.__app.doc; window.__smartApi[fn](d, d.active, ...(a || [])); }, [fn, a]); await wait(); await page.waitForTimeout(250); };
+const a0px = (x, y) => page.evaluate(([x, y]) => [...window.__app.doc.layers[0].ctx.getImageData(x, y, 1, 1).data], [x, y]);
+await smartScene();
+assert.equal(await page.evaluate(() => !!window.__app.doc.layers[0].smart), false);
+await doSmart('convertToSmart');
+assert.equal(await page.evaluate(() => !!window.__app.doc.layers[0].smart && window.__app.doc.linked.length), 1); ok('Convert to Smart Object embeds the layer’s pixels as a linked source');
+assert.ok(await page.evaluate(() => document.querySelectorAll('.smartbadge').length) >= 1); ok('the Layers panel marks smart objects with a badge');
+await page.evaluate(() => { window.__smartApi.transformSmart(window.__app.doc, window.__app.doc.active); });
+await page.waitForSelector('.modal');
+await page.fill('.modal input[name=sx]', '200'); await page.fill('.modal input[name=sy]', '200'); await page.click('.modal button.primary'); await wait(); await page.waitForTimeout(250);
+assert.equal((await a0px(65, 75))[0], 208); assert.equal((await a0px(50, 75))[3], 0); assert.equal((await a0px(215, 185))[0], 208); ok('Transform Smart Object (200%) re-renders the layer from its source about the centre');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal((await a0px(65, 75))[3], 0); assert.equal((await a0px(105, 105))[0], 208); ok('undo restores the previous size');
+await page.keyboard.press('Control+Shift+z'); await wait();
+const rtS = await page.evaluate(() => window.__adjRoundtrip());
+const sl = rtS.layers.find((l) => l.smart); assert.ok(sl && rtS.linked === 1); assert.ok(near(sl.smart.transform.slice(0, 2), [60, 70], 1) && near(sl.smart.transform.slice(4, 6), [220, 190], 1)); ok('PSD round-trip keeps the smart object (placed transform and embedded source)');
+// edit contents → paint in the child → update
+const nDocs = await page.evaluate(() => window.__app.docs.length);
+await page.evaluate(() => { window.__smartApi.editContents(window.__app.doc, window.__app.doc.active, (d) => window.__app.openDoc(d)); });
+await page.waitForFunction((n) => window.__app.docs.length === n + 1, nDocs); await wait();
+const kid = await page.evaluate(() => { const d = window.__app.doc; return { w: d.width, h: d.height, src: !!d.smartSource, name: d.name }; });
+assert.deepEqual([kid.w, kid.h, kid.src], [80, 60, true]); ok('Edit Contents opens the embedded source (80×60) in its own tab');
+await page.evaluate(() => { const d = window.__app.doc, l = d.layers[0]; l.ctx.fillStyle = '#2040d0'; l.ctx.fillRect(0, 0, 80, 60); d.emit('structure'); });
+await page.evaluate(() => { window.__smartApi.updateSmart(window.__app.doc, (d) => window.__app.showDoc(d)); });
+await page.waitForFunction(() => !window.__app.doc.smartSource || window.__app.doc.layers[0].smart, null, { timeout: 5000 }).catch(() => {});
+await page.waitForTimeout(500);
+const afterUpd = await page.evaluate(() => { const d = window.__app.docs.find((x) => !x.smartSource && x.layers[0].smart); return d ? [...d.layers[0].ctx.getImageData(100, 100, 1, 1).data] : null; });
+assert.ok(afterUpd && afterUpd[2] > 180 && afterUpd[0] < 80, JSON.stringify(afterUpd)); ok('Update Smart Object re-renders the parent layer from the edited contents (blue, still 200% scaled)');
+// painting on the layer breaks the link on save; rasterize drops it explicitly
+await page.evaluate(() => { const d = window.__app.docs.find((x) => !x.smartSource && x.layers[0].smart); window.__app.docs.splice(window.__app.docs.indexOf(d) + 1); });
+await page.evaluate(() => { const d = window.__app.docs.find((x) => x.layers[0].smart); const i = window.__app.docs.indexOf(d); window.__app.docs.splice(0, window.__app.docs.length, d); void i; });
+await page.evaluate(() => { window.__app.doc = window.__app.docs[0]; window.__app.emit('tool'); });
+await page.evaluate(() => { const d = window.__app.doc; d.layers[0].ctx.fillStyle = '#0f0'; d.layers[0].ctx.fillRect(0, 0, 5, 5); d.emit('structure'); });
+const rtP = await page.evaluate(() => window.__adjRoundtrip());
+assert.equal(rtP.layers.filter((l) => l.smart).length, 0); assert.equal(rtP.linked, 0); ok('a smart object that was painted on is saved as an ordinary layer (the stale source is dropped)');
+await page.evaluate(() => window.__app.doc.history.undo());
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

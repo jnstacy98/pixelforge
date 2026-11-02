@@ -4,6 +4,7 @@ import { cloneAdjustment, type AdjustmentData } from './adjust';
 import { applyAdjustmentOnto, composite, renderedCanvas } from './render';
 import { cloneFx, type LayerEffects } from './fx';
 import { cloneBlendIf, type BlendIf } from './blendif';
+import { cloneSmart, type LinkedFile, type SmartInfo } from './smartmath';
 import type { Styled } from './fxrender';
 
 export interface Rect { x: number; y: number; w: number; h: number }
@@ -93,6 +94,8 @@ export class Layer {
   effects: LayerEffects | null = null;
   /** Fill opacity: scales the layer's own pixels but not its effects (Opacity scales both). */
   fillOpacity = 1;
+  /** Smart object data (null for ordinary layers); the embedded source file lives in `Doc.linked`. */
+  smart: SmartInfo | null = null;
   /** Blend If sliders (null = off). */
   blendIf: BlendIf | null = null;
   /** Bumped whenever the layer's pixels / mask may have changed; keys the styled-render cache. */
@@ -166,14 +169,14 @@ export function buildTree(layers: Layer[]): LayerNode[] {
 /** An in-progress brush stroke, composited at render time so stroke opacity behaves like Photoshop. */
 export interface Stroke { layer: Layer; canvas: HTMLCanvasElement; opacity: number; erase: boolean; onMask: boolean; /** Preview is already placed where it should be: don't clip it to the selection. */ unclipped?: boolean }
 
-interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; adjustment: AdjustmentData | null; effects: LayerEffects | null; fillOpacity: number; blendIf: BlendIf | null }
+interface LayerState { canvas: HTMLCanvasElement; mask: HTMLCanvasElement | null; maskEnabled: boolean; editMask: boolean; text: TextData | null; adjustment: AdjustmentData | null; effects: LayerEffects | null; fillOpacity: number; blendIf: BlendIf | null; smart: SmartInfo | null }
 const captureLayer = (l: Layer): LayerState => ({
   canvas: cloneCanvas(l.canvas), mask: l.mask && cloneCanvas(l.mask), maskEnabled: l.maskEnabled, editMask: l.editMask, text: l.text && { ...l.text },
-  adjustment: l.adjustment && cloneAdjustment(l.adjustment), effects: cloneFx(l.effects), fillOpacity: l.fillOpacity, blendIf: cloneBlendIf(l.blendIf),
+  adjustment: l.adjustment && cloneAdjustment(l.adjustment), effects: cloneFx(l.effects), fillOpacity: l.fillOpacity, blendIf: cloneBlendIf(l.blendIf), smart: cloneSmart(l.smart),
 });
 const restoreLayer = (l: Layer, s: LayerState) => {
   l.canvas = cloneCanvas(s.canvas); l.mask = s.mask && cloneCanvas(s.mask);
-  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.effects = cloneFx(s.effects); l.fillOpacity = s.fillOpacity; l.blendIf = cloneBlendIf(s.blendIf); l.touchMask();
+  l.maskEnabled = s.maskEnabled; l.editMask = s.editMask; l.text = s.text && { ...s.text }; l.adjustment = s.adjustment && cloneAdjustment(s.adjustment); l.effects = cloneFx(s.effects); l.fillOpacity = s.fillOpacity; l.blendIf = cloneBlendIf(s.blendIf); l.smart = cloneSmart(s.smart); l.touchMask();
 };
 
 interface Snapshot { w: number; h: number; items: { layer: Layer; state: LayerState }[] }
@@ -198,6 +201,10 @@ export class Doc {
   notice: (msg: string) => void = () => {};
   /** Messages produced while importing (e.g. unsupported PSD features). */
   notes: string[] = [];
+  /** Embedded source files of smart objects (PSD linked files). */
+  linked: LinkedFile[] = [];
+  /** Set on a document opened with "Edit Contents": where to send the result on "Update Smart Object". */
+  smartSource: { doc: Doc; layer: Layer } | null = null;
 
   constructor(public width: number, public height: number, public name = 'Untitled') {}
 
@@ -247,7 +254,7 @@ export class Doc {
     if (src.isGroup) return this.duplicateGroup(src);
     const at = this.layers.indexOf(src) + 1;
     const l = this.addLayer(`${src.name} copy`, cloneCanvas(src.canvas), at);
-    l.parent = src.parent; l.clipped = src.clipped; l.effects = cloneFx(src.effects); l.fillOpacity = src.fillOpacity; l.blendIf = cloneBlendIf(src.blendIf);
+    l.parent = src.parent; l.clipped = src.clipped; l.effects = cloneFx(src.effects); l.fillOpacity = src.fillOpacity; l.blendIf = cloneBlendIf(src.blendIf); l.smart = cloneSmart(src.smart);
     l.opacity = src.opacity; l.blend = src.blend; l.visible = src.visible;
     if (src.mask) { l.mask = cloneCanvas(src.mask); l.maskEnabled = src.maskEnabled; }
     if (src.text) l.text = { ...src.text };
@@ -366,7 +373,7 @@ export class Doc {
     const block = this.blockOf(g), map = new Map<Layer, Layer>();
     for (const e of block) {
       const c = e.isGroup ? Layer.group(e.name) : new Layer(e.name, cloneCanvas(e.canvas));
-      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped; c.effects = cloneFx(e.effects); c.fillOpacity = e.fillOpacity; c.blendIf = cloneBlendIf(e.blendIf);
+      c.opacity = e.opacity; c.blend = e.blend; c.visible = e.visible; c.collapsed = e.collapsed; c.clipped = e.clipped; c.effects = cloneFx(e.effects); c.fillOpacity = e.fillOpacity; c.blendIf = cloneBlendIf(e.blendIf); c.smart = cloneSmart(e.smart);
       if (e.mask) { c.mask = cloneCanvas(e.mask); c.maskEnabled = e.maskEnabled; }
       if (e.text) c.text = { ...e.text };
       if (e.adjustment) c.adjustment = cloneAdjustment(e.adjustment);
@@ -521,6 +528,18 @@ export class Doc {
     });
     this.emit('structure');
   }
+  /** Change a layer's pixels / smart-object data (and the doc's embedded files) as one undoable step. */
+  editSmart(label: string, l: Layer, fn: () => void) {
+    const before = captureLayer(l), linkedBefore = [...this.linked];
+    fn();
+    const after = captureLayer(l), linkedAfter = [...this.linked];
+    this.history.push({
+      label,
+      undo: () => { restoreLayer(l, before); this.linked = [...linkedBefore]; this.emit('structure'); },
+      redo: () => { restoreLayer(l, after); this.linked = [...linkedAfter]; this.emit('structure'); },
+    });
+    this.emit('structure');
+  }
   setBlendIf(l: Layer, next: BlendIf | null, before: BlendIf | null = l.blendIf) {
     const a = cloneBlendIf(next), b = cloneBlendIf(before);
     l.blendIf = a;
@@ -554,7 +573,7 @@ export class Doc {
     const belowBefore = captureLayer(below);
     const prevActive = this.active;
     const merged = renderedCanvas(below);        // bake the lower layer's mask and styles first
-    below.canvas = merged; below.mask = null; below.editMask = false; below.text = null; below.effects = null; below.fillOpacity = 1;
+    below.canvas = merged; below.mask = null; below.editMask = false; below.text = null; below.effects = null; below.fillOpacity = 1; below.smart = null;
     const bctx = below.ctx;
     if (l.adjustment) {
       // an adjustment merged down is applied to the layer below only

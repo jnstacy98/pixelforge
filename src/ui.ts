@@ -4,6 +4,7 @@ import { FONTS } from './text';
 import { editAdjustment, newAdjustmentLayer } from './adjustdialog';
 import { ROUND, allTips } from './brushtips';
 import { openLayerStyle } from './stylesdialog';
+import { editContents } from './smart';
 import { openBlendIf } from './blendifdialog';
 import { FX_LABELS, FX_ORDER, hasEffects } from './fx';
 import { ADJUSTMENT_LABELS, type AdjustmentType } from './adjust';
@@ -283,7 +284,13 @@ export function renderLayers() {
       const pix = thumb(l.canvas); pix.classList.add('lthumb');
       pix.classList.toggle('target', l === doc.active && !l.maskMode);
       pix.onclick = () => doc.setEditMask(l, false);
-      parts.push(pix);
+      if (l.smart) {
+        pix.title = 'Smart Object — double-click to edit its contents';
+        pix.ondblclick = (e) => { e.stopPropagation(); doc.select(l); void editContents(doc, l, (d) => app.openDoc(d)); };
+        const wrap = document.createElement('div'); wrap.className = 'smartwrap';
+        const badge = document.createElement('span'); badge.className = 'smartbadge'; badge.textContent = '⧉'; badge.title = 'Smart Object';
+        wrap.append(pix, badge); parts.push(wrap);
+      } else parts.push(pix);
     }
     if (l.mask) {
       const m = thumb(l.mask); m.classList.add('mthumb');

@@ -1,3 +1,4 @@
+import { fingerprint } from './smartmath';
 import { decodeTiff, encodeTiff } from './tiff';
 import { getPattern, hasPattern, registerPattern } from './patterns';
 import { fromPsdRanges, isBlendIfActive, toPsdRanges } from './blendif';
@@ -90,6 +91,7 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
     if (p.id && w > 0 && h > 0 && p.data.length === w * h * 4) registerPattern({ id: p.id, name: p.name || 'Pattern', w, h, data: new Uint8ClampedArray(p.data) });
   }
   const doc = new Doc(psd.width, psd.height, name);
+  for (const f of psd.linkedFiles ?? []) if (f.data && f.id) doc.linked.push({ id: f.id, name: f.name || 'Linked file', type: f.type, data: f.data.slice() });
   /** Expand a PSD mask rectangle to a document-sized grayscale mask (filled with the mask's default colour). */
   const importMask = (c: PsdLayer, l: Layer) => {
     if (!c.mask?.canvas) return;
@@ -118,6 +120,7 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
       const l = new Layer(c.name || 'Layer', canvas);
       l.parent = parent; l.visible = !c.hidden; l.opacity = c.opacity ?? 1; l.clipped = !!c.clipping; l.fillOpacity = c.fillOpacity ?? 1;
       l.blendIf = fromPsdRanges(c.blendingRanges);
+      if (c.placedLayer && doc.linked.some((f) => f.id === c.placedLayer!.id)) l.smart = { placed: JSON.parse(JSON.stringify(c.placedLayer)), print: layerPrint(l) };
       if (c.effects) {
         const { fx, unsupported } = fromPsdEffects(c.effects, psd.imageResources?.globalAngle !== undefined ? { angle: psd.imageResources.globalAngle, altitude: psd.imageResources.globalAltitude ?? 30 } : undefined);
         if (Object.keys(fx).length) l.effects = fx;
@@ -157,12 +160,14 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
       width: doc.width, height: doc.height,
       canvas: flatten(doc),
       ...(usedPatterns(doc).length ? { patterns: usedPatterns(doc) } : {}),
+      ...(usedLinked(doc).length ? { linkedFiles: usedLinked(doc) } : {}),
       children: doc.tree().map(function toPsd(n): PsdLayer {
         const l = n.layer;
         return {
           name: l.name, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible, clipping: l.clipped,
           ...(!l.isGroup && !l.adjustment ? { fillOpacity: l.fillOpacity } : {}),
           ...(l.effects ? { effects: toPsdEffects(l.effects) } : {}),
+          ...(!l.isGroup && smartIntact(doc, l) ? { placedLayer: l.smart!.placed } : {}),
           ...(isBlendIfActive(l.blendIf) ? { blendingRanges: toPsdRanges(l.blendIf) } : {}),
           ...(l.isGroup ? { children: n.children.map(toPsd), opened: !l.collapsed } : l.adjustment ? { adjustment: toPsdAdjustment(l.adjustment) } : { canvas: l.canvas }),
           blendMode: l.blend as PsdLayer['blendMode'],
@@ -223,4 +228,12 @@ function usedPatterns(doc: Doc) {
     const t = getPattern(id);
     return t ? [{ name: t.name, id: t.id, x: 0, y: 0, bounds: { x: 0, y: 0, w: t.w, h: t.h }, data: new Uint8Array(t.data) }] : [];
   });
+}
+
+const layerPrint = (l: Layer) => fingerprint(l.ctx.getImageData(0, 0, l.canvas.width, l.canvas.height).data, l.canvas.width, l.canvas.height);
+/** A smart object whose pixels were painted on after it was rendered is no longer a smart object. */
+export function smartIntact(doc: Doc, l: Layer) { return !!l.smart && doc.linked.some((f) => f.id === l.smart!.placed.id) && layerPrint(l) === l.smart.print; }
+function usedLinked(doc: Doc) {
+  const ids = new Set(doc.layers.filter((l) => !l.isGroup && smartIntact(doc, l)).map((l) => l.smart!.placed.id));
+  return doc.linked.filter((f) => ids.has(f.id)).map((f) => ({ id: f.id, name: f.name, type: f.type, data: f.data }));
 }
