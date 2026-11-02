@@ -2305,6 +2305,31 @@ assert.equal(await page.evaluate(() => window.__app.doc.linked.length), 2); asse
 await page.keyboard.press('Control+z'); await wait();
 assert.equal(await page.evaluate(() => window.__app.doc.linked.length), 1); ok('undo also removes the embedded file that import added');
 
+// 6b. movable / customizable toolbars
+await page.evaluate(() => localStorage.removeItem('pixelforge.layout'));
+const barBox = () => page.evaluate(() => { const r = document.getElementById('toolbar').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, host: document.getElementById('toolbar').parentElement.id || 'body' }; });
+assert.equal((await barBox()).host, 'dock-left'); ok('toolbar starts docked left');
+const gb = await page.evaluate(() => { const r = document.querySelector('#toolbar .grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+await page.mouse.move(gb.x, gb.y); await page.mouse.down(); await page.mouse.move(600, 400, { steps: 6 });
+assert.ok(await page.evaluate(() => document.querySelector('.dockhint.show')), 'hints shown'); await page.mouse.up(); await wait();
+let bb = await barBox(); assert.equal(bb.host, 'body'); assert.ok(Math.abs(bb.x - (600 - gb.x + 0)) < 400 && bb.x > 100); ok('dragging the grip into the middle floats the toolbar');
+const gb2 = await page.evaluate(() => { const r = document.querySelector('#toolbar .grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+await page.mouse.move(gb2.x, gb2.y); await page.mouse.down(); await page.mouse.move(750, 20, { steps: 6 }); await page.mouse.up(); await wait();
+bb = await barBox(); assert.equal(bb.host, 'dock-top'); assert.ok(bb.w > 1000 && bb.h < 90); ok('dropping on the top edge docks it as a horizontal bar');
+assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('pixelforge.layout')).toolbar.dock), 'top'); ok('the layout is remembered');
+await page.evaluate(() => window.__layout.dock('right')); assert.equal((await barBox()).host, 'dock-right'); ok('can dock right');
+await page.evaluate(() => window.__layout.options('bottom'));
+assert.equal(await page.evaluate(() => document.getElementById('options').parentElement.id), 'dock-bottom'); ok('options bar can move to the bottom');
+await page.evaluate(() => { window.__app.setTool('eraser'); window.__app.setTool('brush'); });
+assert.ok(await page.evaluate(() => document.getElementById('options').children.length > 0)); ok('options bar still works after moving');
+await page.click('#menubar .menu:has-text("View") .title'); await page.click('.mi:has-text("Customize Toolbar")');
+await page.click('.cust-row[data-tool="lasso"] input'); await page.click('.cust-row[data-tool="hand"] button[title="Move up"]');
+assert.equal(await page.evaluate(() => document.querySelector('.tool[data-tool="lasso"]')), null); ok('unticking a tool hides it from the toolbar');
+assert.equal(await page.evaluate(() => { const o = [...document.querySelectorAll('#toolbar .tool')].map((e) => e.dataset.tool); return o.indexOf('hand') < o.indexOf('eyedropper'); }), true); ok('reordering moves the tool');
+await page.click('.tbcust button:has-text("Reset")'); await page.click('.tbcust button.primary'); await wait();
+bb = await barBox(); assert.equal(bb.host, 'dock-left'); assert.ok(await page.evaluate(() => !!document.querySelector('.tool[data-tool="lasso"]'))); ok('Reset restores the default layout');
+await page.evaluate(() => window.__app.setTool('brush'));
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

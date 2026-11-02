@@ -1,6 +1,7 @@
 // Unit tests for the pure tone maths. Runs on Node's built-in TypeScript stripping (Node >= 22.18).
 import assert from 'node:assert/strict';
 import * as A from '../src/adjust.ts';
+import * as LM from '../src/layoutmath.ts';
 
 let n = 0;
 const t = (name, fn) => { fn(); n++; console.log(`  ✓ ${name}`); };
@@ -906,6 +907,33 @@ t('PSD Lab colours (Photo Filter) import as sRGB', () => {
 });
 t('noise gradient maps are not imported (reported as unsupported)', () => {
   assert.equal(P.fromPsdAdjustment({ type: 'gradient map', gradientType: 'noise' }), null);
+});
+
+
+// ---- toolbar layout maths
+const LTL = ['a', 'b', 'c', 'd'];
+t('layout: garbage falls back to the default', () => {
+  assert.deepEqual(LM.sanitizeLayout(null, LTL), LM.defaultLayout(LTL));
+  assert.equal(LM.sanitizeLayout({ toolbar: { dock: 'nope' }, options: 7 }, LTL).toolbar.dock, 'left');
+});
+t('layout: unknown tools dropped, new tools appended, duplicates removed', () => {
+  const l = LM.sanitizeLayout({ order: ['c', 'zzz', 'a', 'c'], hidden: ['zzz', 'a'] }, LTL);
+  assert.deepEqual(l.order, ['c', 'a', 'b', 'd']); assert.deepEqual(l.hidden, ['a']);
+});
+t('layout: hiding every tool is repaired so the bar can never vanish', () => {
+  assert.deepEqual(LM.sanitizeLayout({ hidden: LTL }, LTL).hidden, []);
+});
+t('layout: dock zones come from the nearest window edge, middle floats', () => {
+  assert.equal(LM.dockFromPoint(10, 400, 1000, 800), 'left'); assert.equal(LM.dockFromPoint(990, 400, 1000, 800), 'right');
+  assert.equal(LM.dockFromPoint(500, 5, 1000, 800), 'top'); assert.equal(LM.dockFromPoint(500, 790, 1000, 800), 'bottom');
+  assert.equal(LM.dockFromPoint(500, 400, 1000, 800), null);
+});
+t('layout: moveItem reorders and clamps', () => {
+  assert.deepEqual(LM.moveItem(LTL, 0, 2), ['b', 'c', 'a', 'd']); assert.deepEqual(LM.moveItem(LTL, 3, -5), ['d', 'a', 'b', 'c']);
+  assert.deepEqual(LM.moveItem(LTL, 9, 0), LTL);
+});
+t('layout: floating bars are kept inside the window', () => {
+  assert.deepEqual(LM.clampFloat(-20, 900, 44, 300, 1000, 800), { x: 0, y: 500 });
 });
 
 for (const [name, fn] of asyncTests) { await fn(); n++; console.log(`  ✓ ${name}`); }
