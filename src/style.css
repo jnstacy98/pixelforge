@@ -114,3 +114,5 @@ input[type=range] { accent-color: var(--accent); }
 
 .smartwrap { position: relative; display: inline-block; }
 .smartbadge { position: absolute; right: 0; bottom: 0; background: #1a6fd1; color: #fff; font-size: 10px; line-height: 12px; width: 13px; text-align: center; border-top-left-radius: 3px; pointer-events: none; }
+
+.texteditor.pathtext { background: rgba(255,255,255,.95); border: 1px solid #1a6fd1; border-radius: 3px; padding: 3px 6px; resize: none; overflow: hidden; z-index: 5; }

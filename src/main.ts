@@ -26,7 +26,7 @@ import { autoLevels, editAdjustment, isAdjusting, newAdjustmentLayer, openCurves
 // ------------------------------------------------------------------ documents
 function refresh() {
   renderLayers(); renderHistory(); renderTabs(switchTo, closeDoc); renderStatus();
-  if (app.toolId === 'shape') renderOptions();
+  if (app.toolId === 'shape' || (app.toolId === 'text' && !document.querySelector('.texteditor'))) renderOptions();
   document.title = `${app.doc.name}${app.doc.history.dirty ? ' •' : ''} — PixelForge`;
 }
 let unsubDoc: (() => void) | null = null;

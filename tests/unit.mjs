@@ -247,6 +247,28 @@ t('boolean shape operations: unite / subtract / intersect / exclude areas, holes
   assert.equal(SH.cloneShape(hole).contours.length, 2); const cl = SH.cloneShape(hole); cl.contours[0][0][0] = 999; assert.notEqual(hole.contours[0][0][0], 999);
 });
 
+import * as TP from '../src/textpath.ts';
+t('text on a path: flattening, arc length, glyph placement along lines / curves / loops, alignment, flip, clipping', () => {
+  const near1 = (a, b, e = 1e-6) => a.every((v, i) => Math.abs(v - b[i]) < e);
+  const line = { pts: [[0, 0], [100, 0]], closed: false }, cum = TP.cumulative(line.pts);
+  assert.deepEqual(cum, [0, 100]); assert.ok(near1(Object.values(TP.pointAt(line, cum, 25)), [25, 0, 0]));
+  assert.equal(TP.pointAt(line, cum, 101), null); assert.equal(TP.pointAt(line, cum, -1), null);
+  const sq = { pts: [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]], closed: true }, sc = TP.cumulative(sq.pts);
+  assert.ok(near1(Object.values(TP.pointAt(sq, sc, 45)), [5, 0, 0])); assert.ok(near1(Object.values(TP.pointAt(sq, sc, 15)), [10, 5, Math.PI / 2]));           // closed paths wrap round
+  const pl = TP.placeGlyphs([10, 10, 10], line, { offset: 5, align: 'left' }); assert.deepEqual(pl.map((g) => [g.x, g.y]), [[10, 0], [20, 0], [30, 0]]);      // centres of the glyph cells
+  const ce = TP.placeGlyphs([10, 10], line, { offset: 50, align: 'center' }); assert.ok(near1(ce.map((g) => g.x), [45, 55]));
+  const ri = TP.placeGlyphs([10, 10], line, { offset: 100, align: 'right' }); assert.ok(near1(ri.map((g) => g.x), [85, 95]));
+  const fl = TP.placeGlyphs([10, 10], line, { offset: 0, align: 'left', flip: true }); assert.ok(near1(fl.map((g) => g.x), [95, 85])); assert.ok(Math.abs(Math.abs(fl[0].angle) - Math.PI) < 1e-9);   // runs the other way round
+  assert.equal(TP.placeGlyphs([30, 30, 30, 30], line, { offset: 0, align: 'left' }).length, 3);                                                              // glyphs beyond the end are dropped
+  assert.equal(TP.placeGlyphs([10, 10, 10, 10], sq, { offset: 35, align: 'left' }).length, 4);                                                               // …but a closed path wraps
+  const cmds = [['M', 0, 0], ['C', 0, 55, 100, 55, 100, 0]], poly = TP.flattenCmds(cmds)[0]; assert.ok(poly.pts.length > 20 && !poly.closed);
+  const arc = TP.cumulative(poly.pts); assert.ok(arc.at(-1) > 100 && arc.at(-1) < 160);
+  const mid = TP.pointAt(poly, arc, arc.at(-1) / 2); assert.ok(Math.abs(mid.x - 50) < 1 && mid.y > 30 && Math.abs(mid.angle) < 0.05);                         // top of the arch, tangent horizontal
+  assert.equal(TP.flattenCmds([['M', 0, 0], ['L', 10, 0], ['L', 10, 10], ['Z']])[0].closed, true);
+  const nr = TP.nearestOnPoly(line, 40, 7); assert.ok(Math.abs(nr.d - 7) < 1e-9 && Math.abs(nr.s - 40) < 1e-9);
+  assert.equal(TP.flattenCmds([['M', 5, 5]]).length, 0);
+});
+
 // ---- smart objects
 import * as SM from '../src/smartmath.ts';
 t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {

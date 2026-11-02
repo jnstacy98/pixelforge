@@ -2009,6 +2009,44 @@ const n3 = await page.evaluate(() => window.__app.doc.layers.length);
 await page.evaluate(() => { const d = window.__app.doc, shapes = d.layers.filter((l) => l.shape); d.multi = new Set([shapes[0], shapes[1]]); d.active = shapes[1]; window.__combine('unite'); }); await wait();
 assert.equal(await page.evaluate(() => window.__app.doc.layers.length), n3); ok('open paths (lines) refuse to combine and leave the layers alone');
 
+// 6ad. text on a path
+await shScene('ellipse', { useFill: false, useStroke: true, stroke: '#cccccc', strokeW: 2 }); await shDrag([150, 100], [350, 300]);
+await page.evaluate(() => { const a = window.__app; a.fg = '#ff0000'; a.text.size = 24; a.text.align = 'left'; a.setTool('text'); });
+await wait();
+const redRing = (r0, r1) => page.evaluate(([r0, r1]) => { const l = [...window.__app.doc.layers].reverse().find((q) => q.text), d = l.ctx.getImageData(0, 0, 400, 300).data; let n = 0; for (let y = 0; y < 300; y++) for (let x = 0; x < 400; x++) { const a = d[(y * 400 + x) * 4 + 3]; if (a > 128) { const r = Math.hypot(x - 250, y - 200); if (r >= r0 && r <= r1) n++; } } return n; }, [r0, r1]);
+{ const q = await toScreen(350, 200); await page.mouse.click(q.x, q.y); }
+await page.waitForSelector('textarea.texteditor.pathtext'); await page.keyboard.type('Hello world'); await page.keyboard.press('Escape'); await wait();
+let pathTxt = await page.evaluate(() => { const l = [...window.__app.doc.layers].reverse().find((q) => q.text); return l && l.text.path ? { content: l.text.content, off: l.text.pathOffset, flip: l.text.pathFlip, name: l.name } : null; });
+assert.ok(pathTxt && pathTxt.content === 'Hello world' && pathTxt.off < 8 && pathTxt.flip === false); ok('Text tool: clicking on a shape’s outline starts a text layer whose type follows that outline');
+assert.ok(await redRing(100, 128) > 80); assert.equal(await redRing(0, 80), 0); ok('the glyphs are drawn along the circle, outside it, and nothing lands in the middle');
+const ringQ = await page.evaluate(() => { const l = [...window.__app.doc.layers].reverse().find((q) => q.text), d = l.ctx.getImageData(0, 0, 400, 300).data; const q = [0, 0, 0, 0]; for (let y = 0; y < 300; y++) for (let x = 0; x < 400; x++) if (d[(y * 400 + x) * 4 + 3] > 128) q[(x > 250 ? 1 : 0) + (y > 200 ? 2 : 0)]++; return q; });
+assert.ok(ringQ[3] > 50 && ringQ[3] > ringQ[0]); ok('…starting at the right and running clockwise round the lower right (the glyphs rotate with the curve)');
+// flip to the other side via the options bar
+await page.evaluate(() => { [...document.querySelectorAll('#options label')].find((l) => l.textContent.includes('Other side')).querySelector('input').click(); }); await wait();
+assert.ok(await redRing(70, 99) > 80); assert.equal(await redRing(104, 140), 0); assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Edit Text'); ok('“Other side” flips the text to the inside of the circle (one undo step)');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok(await redRing(104, 140) > 80); ok('…and undoes');
+// start offset
+await page.evaluate(() => { const i = [...document.querySelectorAll('#options label')].find((l) => l.textContent.includes('Path offset')).querySelector('input'); i.value = '300'; i.dispatchEvent(new Event('change', { bubbles: true })); }); await wait();
+const leftQ = await page.evaluate(() => { const l = [...window.__app.doc.layers].reverse().find((q) => q.text), d = l.ctx.getImageData(0, 0, 400, 300).data; let left = 0; for (let y = 0; y < 300; y++) for (let x = 0; x < 400; x++) if (d[(y * 400 + x) * 4 + 3] > 128 && x < 250 && y > 200) left++; return left; });
+assert.ok(leftQ > 50); ok('Path offset slides the text further along the path (300 px ≈ the bottom-left)');
+// re-edit by clicking on the text, then move it
+{ const q = await toScreen(250, 300); await page.mouse.click(q.x, q.y); }
+await page.waitForSelector('textarea.texteditor.pathtext'); assert.equal(await page.inputValue('textarea.texteditor.pathtext'), 'Hello world'); ok('clicking the text re-opens it for editing');
+await page.keyboard.press('Escape'); await wait();
+const txtPos = () => page.evaluate(() => { const l = [...window.__app.doc.layers].reverse().find((q) => q.text); return [l.text.x, l.text.y]; });
+const txt0 = await txtPos();
+await page.evaluate(() => window.__app.setTool('move')); await wait();
+{ const a = await toScreen(250, 200), b = await toScreen(280, 210); await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 4 }); await page.mouse.up(); await wait(); }
+const movedTxt = await txtPos();
+assert.ok(near(movedTxt, [txt0[0] + 30, txt0[1] + 10], 1)); ok('moving the text layer moves its path with it');
+await page.keyboard.press('Control+z'); await wait();
+// plain text on the outline with Alt, and a normal click elsewhere
+await page.evaluate(() => window.__app.setTool('text')); await wait();
+{ const q = await toScreen(350, 200); await page.keyboard.down('Alt'); await page.mouse.click(q.x + 60, q.y + 60); await page.keyboard.up('Alt'); }
+assert.equal(await page.evaluate(() => document.querySelector('textarea.texteditor').classList.contains('pathtext')), false); ok('clicking away from any outline starts ordinary text');
+await page.keyboard.press('Escape'); await wait();
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

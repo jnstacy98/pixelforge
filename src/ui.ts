@@ -2,6 +2,7 @@ import { app, type ToolId } from './state';
 import { BLEND_MODES, GROUP_BLEND_MODES, type Layer, type LayerNode } from './doc';
 import { FONTS } from './text';
 import { editAdjustment, newAdjustmentLayer } from './adjustdialog';
+import { editor as textEditor } from './texttool';
 import { renderShape } from './shape';
 import { cloneShape, type ShapeData } from './shapemath';
 import { ROUND, allTips } from './brushtips';
@@ -220,9 +221,19 @@ export function renderOptions() {
     align.value = tx.align; align.onchange = () => { tx.align = align.value as typeof tx.align; fire(); };
     const lab = (n: string, el: HTMLElement) => { const l = document.createElement('label'); l.append(n, el); return l; };
     const hint = document.createElement('span'); hint.style.color = 'var(--dim)';
-    hint.textContent = 'Click canvas to type · click text to edit · Esc / Ctrl+Enter to finish · color = foreground';
+    hint.textContent = 'Click canvas to type · click a shape\'s outline to type along it (Alt+click = plain text) · click text to edit · Esc / Ctrl+Enter to finish · color = foreground';
     el.append(lab('Font', fontSel), lab('Size', size), toggle('<b>B</b>', '', () => tx.bold, (v) => (tx.bold = v)),
-      toggle('<i>I</i>', '', () => tx.italic, (v) => (tx.italic = v)), lab('Align', align), hint);
+      toggle('<i>I</i>', '', () => tx.italic, (v) => (tx.italic = v)), lab('Align', align));
+    const act = app.doc.active, onPath = textEditor.hasPath || !!act.text?.path;
+    if (onPath) {                                                       // text on a path: where it starts and which side it runs on
+      const cur = () => (textEditor.hasPath ? { offset: textEditor.pathProps.offset, flip: textEditor.pathProps.flip } : { offset: act.text!.pathOffset ?? 0, flip: !!act.text!.pathFlip });
+      const set = (patch: { pathOffset?: number; pathFlip?: boolean }) => { if (textEditor.hasPath) textEditor.setPathProps(patch); else if (act.text) app.doc.setText(act, { ...act.text, ...patch }); };
+      const off = document.createElement('input'); off.type = 'number'; off.step = '1'; off.style.width = '72px'; off.value = String(Math.round(cur().offset));
+      off.onchange = () => { const v = Number(off.value); if (Number.isFinite(v)) set({ pathOffset: v }); };
+      const fl = document.createElement('label'), fc = document.createElement('input'); fc.type = 'checkbox'; fc.checked = cur().flip; fc.onchange = () => set({ pathFlip: fc.checked }); fl.append(fc, 'Other side');
+      el.append(lab('Path offset', off), fl);
+    }
+    el.append(hint);
   } else {
     const hint = document.createElement('span');
     hint.style.color = 'var(--dim)';
