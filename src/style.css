@@ -139,3 +139,9 @@ input[type=range] { accent-color: var(--accent); }
 .cust-list { display: grid; max-height: 55vh; overflow-y: auto; background: var(--bg0); border: 1px solid var(--line); border-radius: 4px; }
 .cust-row { display: flex; align-items: center; gap: 8px; padding: 2px 8px; border-bottom: 1px solid #1a1a1a; } .cust-row .tool { cursor: default; } .cust-row button { padding: 0 6px; }
 #options .grip { flex: none; width: 10px; height: 24px; margin-right: -4px; cursor: grab; border-radius: 3px; background: radial-gradient(circle, var(--dim) 1px, transparent 1.5px) 0 0 / 6px 6px; opacity: .6; touch-action: none; } #options .grip:hover, #options .grip.dragging { opacity: 1; background-color: var(--bg3); }
+
+/* movable panels */
+#dock-left > #toolbar { order: 0; } #dock-left > #panels { order: 1; } #dock-right > #panels { order: 0; } #dock-right > #toolbar { order: 1; }
+#panels.on-left { border-left: 0; border-right: 1px solid var(--line); }
+.pgrip { flex: none; height: 10px; cursor: grab; background: radial-gradient(circle, var(--dim) 1px, transparent 1.5px) 0 0 / 6px 6px; opacity: .5; touch-action: none; border-bottom: 1px solid var(--line); } .pgrip:hover, .pgrip.dragging { opacity: 1; background-color: var(--bg3); }
+#panels h3 { cursor: grab; }
