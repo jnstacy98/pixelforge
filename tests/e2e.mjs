@@ -2250,6 +2250,61 @@ await page.evaluate(() => {
 await wait();
 const fz = await page.evaluate(() => window.__fuseCheck()); assert.ok(fz.max <= 1, `fused vs separate differ by ${fz.max}`); ok('Levels + Curves + Invert in a row give the same pixels (±1) whether applied in one fused pass or one by one');
 
+// 6al. import layers from another document
+const impSrc = `
+  const Doc = window.__app.doc.constructor, src = Doc.blank(100, 80, 'src', null), l0 = src.layers[0]; l0.name = 'Pix'; l0.ctx.fillStyle = '#ff0000'; l0.ctx.fillRect(10, 10, 30, 20);
+  const M = src.addLayer('Masked'); M.ctx.fillStyle = '#00ff00'; M.ctx.fillRect(0, 0, 100, 80); src.select(M); src.addMask('reveal'); const mx = M.mask.getContext('2d'); mx.fillStyle = '#000'; mx.fillRect(50, 40, 20, 20); src.setEditMask(M, false);
+  const A = src.addLayer('InGrp'); A.ctx.fillStyle = '#0000ff'; A.ctx.fillRect(60, 5, 20, 20); src.select(A); const G = src.groupLayers([A]); G.name = 'Grp';
+  src.createTextLayer({ content: 'Hi', font: 'Arial', size: 20, bold: false, italic: false, align: 'left', color: '#ffffff', x: 5, y: 50 });
+  src.createShapeLayer(window.__makeShape(), 'Shape', window.__renderShape);
+  src.addAdjustmentLayer(window.__defaultAdj('invert'), 'Inv');
+`;
+await page.evaluate(() => { window.__makeShape = () => ({ kind: 'rect', w: 20, h: 10, T: [1, 0, 0, 1, 70, 60], radius: 0, sides: 5, inner: 0.5, pts: [], closed: true, fill: '#ffff00', stroke: null, strokeW: 4 }); });
+const impFresh = () => page.evaluate(() => { window.__blank(400, 300); const d = window.__app.doc; d.layers[0].name = 'Base'; d.layers[0].ctx.fillStyle = '#888'; d.layers[0].ctx.fillRect(0, 0, 400, 300); d.emit('structure'); });
+await impFresh();
+const impBase = await page.evaluate(() => window.__app.doc.layers.length);
+const impCount = await page.evaluate((code) => { const f = new Function('window', code + '; return window.__mergeDocument(window.__app.doc, src, "src", { place: "center", group: true, flatten: false }).length;'); return f(window); }, impSrc);
+const imp = (n) => page.evaluate((n) => { const l = window.__app.doc.layers.find((q) => q.name === n); return l ? { parent: l.parent && l.parent.name, hasMask: !!l.mask, text: l.text && { x: l.text.x, y: l.text.y }, shape: l.shape && [l.shape.T[4], l.shape.T[5]], adj: !!l.adjustment, w: l.canvas.width, h: l.canvas.height } : null; }, n);
+const impPx = (n, x, y) => page.evaluate(([n, x, y]) => [...window.__app.doc.layers.find((q) => q.name === n).ctx.getImageData(x, y, 1, 1).data], [n, x, y]);
+const impMask = (n, x, y) => page.evaluate(([n, x, y]) => window.__app.doc.layers.find((q) => q.name === n).mask.getContext('2d').getImageData(x, y, 1, 1).data[0], [n, x, y]);
+assert.equal(await page.evaluate(() => window.__app.doc.layers.length), impBase + impCount); assert.ok(impCount >= 7); ok('Import Layers brings in every layer of the other document (plus a group for them)');
+assert.deepEqual((await impPx('Pix', 160, 120)).slice(0, 4), [255, 0, 0, 255]); assert.equal((await impPx('Pix', 100, 100))[3], 0); ok('a 100×80 file is centred on the 400×300 canvas: its (10,10) lands at (160,120)');
+assert.equal(await impMask('Masked', 0, 0), 255); assert.equal(await impMask('Masked', 50 + 150 + 5, 40 + 110 + 5), 0); assert.equal(await impMask('Masked', 10, 10), 255); ok('layer masks move with their layers (and continue with their border colour outside the file)');
+const impTxt = await imp('Hi'); assert.deepEqual([impTxt.text.x, impTxt.text.y], [155, 160]); const impShp = await imp('Shape'); assert.deepEqual(impShp.shape, [220, 170]); ok('text and vector shapes keep their editable data, moved by the offset');
+const impIn = await imp('InGrp'); assert.equal(impIn.parent, 'Grp'); const impGrp = await imp('Grp'); assert.equal(impGrp.parent, 'src'); ok('groups keep their structure, and everything sits inside a new group named after the file');
+assert.ok((await imp('Inv')).adj && (await imp('Inv')).w === 400); ok('adjustment layers come along and cover the whole target canvas');
+assert.equal(await page.evaluate(() => window.__app.doc.validate().length), 0); ok('the document structure stays valid');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Import Layers');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.layers.length), impBase); ok('one undo step removes all of it');
+await page.keyboard.press('Control+Shift+z'); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.layers.length), impBase + impCount); ok('…and redo puts it back');
+// options: top-left, no group, flattened
+await impFresh();
+await page.evaluate((code) => { const f = new Function('window', code + '; return window.__mergeDocument(window.__app.doc, src, "src", { place: "topleft", group: false, flatten: false });'); f(window); }, impSrc);
+assert.deepEqual((await impPx('Pix', 10, 10)).slice(0, 4), [255, 0, 0, 255]); assert.equal((await imp('Grp')).parent, null); ok('“Top-left corner” keeps the file’s own coordinates; without the group the layers go straight into the stack');
+await impFresh();
+const impFlat = await page.evaluate((code) => { const f = new Function('window', code + '; return window.__mergeDocument(window.__app.doc, src, "flat.psd", { place: "center", group: false, flatten: true }).length;'); return f(window); }, impSrc);
+assert.equal(impFlat, 1); assert.equal((await page.evaluate(() => window.__app.doc.active.name)), 'flat.psd'); ok('“One flattened layer” imports the whole picture as a single layer');
+// a real file: PSD with pixel layers, masks and a smart object; importing twice shares the embedded file
+await impFresh();
+await page.evaluate(() => { window.__blank(100, 80); const d = window.__app.doc; d.layers[0].name = 'Back'; const L1 = d.addLayer('Sm'); L1.ctx.fillStyle = '#ff8800'; L1.ctx.fillRect(20, 20, 30, 30); d.emit('structure'); window.__smartApi.convertToSmart(d, L1); });
+await page.waitForFunction(() => window.__app.doc.layers.find((l) => l.name === 'Sm').smart); await wait();
+const impB64 = await page.evaluate(() => window.__encodeB64('psd'));
+await impFresh();
+await page.evaluate(([impB64]) => window.__importLayers(impB64, 'part.psd', { place: 'center', group: false, flatten: false }), [impB64]);
+const impSmart = await page.evaluate(() => { const l = window.__app.doc.layers.find((q) => q.name === 'Sm'); return { smart: !!l.smart, linked: window.__app.doc.linked.length, tr: l.smart && l.smart.placed.transform.slice(0, 2) }; });
+assert.ok(impSmart.smart && impSmart.linked === 1 && near(impSmart.tr, [20 + 150, 20 + 110], 1)); ok('a smart object arrives still a smart object, with its embedded file and its placed transform moved');
+await page.evaluate(([impB64]) => window.__importLayers(impB64, 'part.psd', { place: 'topleft', group: false, flatten: false }), [impB64]);
+assert.equal(await page.evaluate(() => window.__app.doc.linked.length), 1); ok('importing the same file again reuses the identical embedded file instead of duplicating it');
+assert.equal(await page.evaluate(() => { const ls = window.__app.doc.layers.filter((l) => l.smart); return new Set(ls.map((l) => l.smart.placed.id)).size; }), 1);
+// different contents under the same id get a fresh id
+await page.evaluate(() => { const d = window.__app.doc, l = d.layers.find((q) => q.smart); d.linked = d.linked.map((f) => ({ ...f, data: Uint8Array.from([...f.data, 0]) })); });
+await page.evaluate(([impB64]) => window.__importLayers(impB64, 'part.psd', { place: 'topleft', group: false, flatten: false }), [impB64]);
+assert.equal(await page.evaluate(() => window.__app.doc.linked.length), 2); assert.equal(await page.evaluate(() => new Set(window.__app.doc.layers.filter((l) => l.smart).map((l) => l.smart.placed.id)).size), 2); ok('a clashing id with different contents is given a new id, so the two smart objects stay independent');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.linked.length), 1); ok('undo also removes the embedded file that import added');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

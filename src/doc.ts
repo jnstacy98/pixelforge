@@ -688,6 +688,20 @@ export class Doc {
     this.emit('structure');
     return l;
   }
+  /**
+   * Insert ready-made layers (e.g. from another document) above the active layer as one undoable step. Layers that have no
+   * parent among `layers` become children of the active layer's parent; `linked` are smart-object files to add.
+   */
+  insertLayers(layers: Layer[], linked: LinkedFile[], label: string) {
+    const set = new Set(layers), parent = this.active.parent, before = this.structSnap(), linkedBefore = [...this.linked];
+    for (const l of layers) if (!l.parent || !set.has(l.parent)) l.parent = parent;
+    this.layers.splice(this.layers.indexOf(this.active) + 1, 0, ...layers);
+    this.linked = [...this.linked, ...linked];
+    this.active = [...layers].reverse().find((l) => !l.isGroup) ?? layers[layers.length - 1]; this.multi.clear();
+    const after = this.structSnap(), linkedAfter = [...this.linked];
+    this.history.push({ label, undo: () => { this.linked = [...linkedBefore]; this.structApply(before); }, redo: () => { this.linked = [...linkedAfter]; this.structApply(after); } });
+    this.emit('structure');
+  }
   /** Replace several shape layers by one combined shape (placed where the lowest was). */
   combineShapes(layers: Layer[], result: ShapeData, render: (canvas: HTMLCanvasElement, s: ShapeData) => void, label: string) {
     const set = new Set(layers), lowest = this.layers.find((l) => set.has(l))!;

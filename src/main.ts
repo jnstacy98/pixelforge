@@ -14,6 +14,8 @@ import { composite, compositeRect, renderFlags } from './render';
 import { editor } from './texttool';
 import { freeTransform, startFreeTransform } from './freetransform';
 import { COMBINE_OPS, combineSelected } from './shape';
+import { renderShape } from './shape';
+import { importLayersFromFile, mergeDocument } from './mergedoc';
 import { addFilterMask, deleteFilterMask, addSmartFilter, openSmartFilters, removeSmartFilter, updateSmartFilter, convertToSmart, editContents, isSmart, rasterizeSmart, transformSmart, updateSmart } from './smart';
 import { defineBrushTip } from './definetip';
 import { loadSavedTips } from './brushtips';
@@ -92,6 +94,7 @@ const menus: { title: string; items: () => Item[] }[] = [
   { title: 'File', items: () => [
     { label: 'New…', shortcut: 'Ctrl+N', action: newDocument },
     { label: 'Open…', shortcut: 'Ctrl+O', action: async () => openFiles(await pickFiles()) },
+    { label: 'Import Layers from File…', action: () => importLayersFromFile() },
     '-',
     { label: 'Save as PSD (layers)…', shortcut: 'Ctrl+S', action: () => exportAs('psd') },
     { label: 'Export PNG…', shortcut: 'Ctrl+Shift+S', action: () => exportAs('png') },
@@ -309,7 +312,8 @@ window.addEventListener('drop', async (e) => {
   e.preventDefault(); dragDepth = 0; dz.classList.remove('show');
   const files = [...(e.dataTransfer?.files ?? [])].filter((f) => OPEN_EXTS.includes(f.name.split('.').pop()!.toLowerCase()));
   if (!files.length && e.dataTransfer?.files.length) return app.toast('Unsupported file type');
-  openFiles(await Promise.all(files.map(async (f) => ({ name: f.name, data: await f.arrayBuffer() }))));
+  const opened = await Promise.all(files.map(async (f) => ({ name: f.name, data: await f.arrayBuffer() })));
+  if (e.shiftKey) importLayersFromFile(opened); else openFiles(opened);      // Shift+drop adds the file's layers to the open document
 });
 
 // ------------------------------------------------------------------ boot
@@ -442,6 +446,15 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
 };
 (window as any).__xform = freeTransform;
 (window as any).__combine = combineSelected;
+(window as any).__mergeDocument = mergeDocument;
+(window as any).__renderShape = renderShape;
+(window as any).__importLayers = async (b64: string, name: string, o: { place: 'center' | 'topleft'; group: boolean; flatten: boolean }) => {
+  const { importFile } = await import('./io');
+  const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  const src = await importFile({ name, data: u.buffer });
+  return mergeDocument(app.doc, src, name.replace(/\.[^.]+$/, ''), o).length;
+};
+(window as any).__encodeB64 = async (fmt: 'psd' | 'png') => { const { encode } = await import('./io'); const u = await encode(app.doc, fmt); let s = ''; for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode(...u.subarray(i, i + 8192)); return btoa(s); };
 (window as any).__smartApi = { addFilterMask, deleteFilterMask, addSmartFilter, updateSmartFilter, removeSmartFilter, openSmartFilters, isSmart, convertToSmart, editContents, updateSmart, transformSmart, rasterizeSmart };
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;
