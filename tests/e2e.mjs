@@ -1707,6 +1707,21 @@ assert.ok(near((await base0(10, 10)).slice(0, 3), [61, 62, 43], 3)); ok('Merge D
 await page.keyboard.press('Control+z'); await wait();
 assert.ok(near(await view(), [61, 62, 43], 3)); ok('undo restores the adjustment layer with its blend mode');
 
+// 6w. TIFF
+import { readFileSync } from 'node:fs';
+const tifB64 = (n) => readFileSync(new URL(`./tiff-fixtures/${n}.tif`, import.meta.url)).toString('base64');
+const ti = await page.evaluate((b) => window.__importFileB64(b, 'photo.tiff'), tifB64('rgb-lzw'));
+assert.deepEqual([ti.w, ti.h, ti.layers.length], [16, 12, 1]); assert.deepEqual(ti.layers[0].p00, [255, 0, 0, 255]); assert.deepEqual(ti.layers[0].pEnd, [255, 255, 0, 255]); ok('TIFF import: an LZW-compressed file opens with the right size and pixels');
+const tm = await page.evaluate((b) => window.__importFileB64(b, 'pages.tif'), tifB64('multipage'));
+assert.deepEqual(tm.layers.map((l) => [l.name, l.visible]), [['Page 1', true], ['Page 2', false]]); assert.deepEqual([tm.w, tm.h], [16, 12]); ok('TIFF import: a multi-page file becomes one layer per page (first visible)');
+const tr = await page.evaluate((b) => window.__importFileB64(b, 'alpha.tif'), tifB64('rgba-deflate'));
+assert.equal(tr.layers[0].p00[3], 0); assert.equal(tr.layers[0].pEnd[3], 255); ok('TIFF import keeps transparency');
+const tcm = await page.evaluate((b) => window.__importFileB64(b, 'print.tif'), tifB64('cmyk'));
+assert.deepEqual(tcm.layers[0].p00.slice(0, 3), [255, 0, 0]); ok('TIFF import: CMYK is converted to RGB');
+await page.evaluate(() => { window.__blank(200, 200); const d = window.__app.doc, l = d.layers[0]; l.ctx.clearRect(0, 0, 200, 200); l.ctx.fillStyle = '#3070c0'; l.ctx.fillRect(0, 0, 100, 100); l.ctx.fillStyle = 'rgba(200,40,40,0.5)'; l.ctx.fillRect(50, 50, 100, 100); d.emit('structure'); });
+const trt = await page.evaluate(() => window.__tiffRoundtrip());
+assert.deepEqual([trt.w, trt.h], [200, 200]); assert.deepEqual(trt.px[0], [48, 112, 192, 255]); assert.equal(trt.px[2][3], 0); assert.ok(near(trt.px[1], [124, 76, 116, 255], 3), `overlap ${trt.px[1]}`); ok('TIFF export → import round-trips the composite, including transparency');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

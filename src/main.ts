@@ -73,7 +73,7 @@ async function exportAs(fmt: ExportFormat) {
     if (!v) return;
     quality = v.q / 100;
   }
-  try { if (await saveAs(app.doc, fmt, quality)) app.toast(`Saved ${app.doc.name}.${fmt === 'jpeg' ? 'jpg' : fmt}`); }
+  try { if (await saveAs(app.doc, fmt, quality)) app.toast(`Saved ${app.doc.name}.${fmt === 'jpeg' ? 'jpg' : fmt === 'tiff' ? 'tif' : fmt}`); }
   catch (e) { app.toast('Save failed: ' + (e as Error).message); }
 }
 
@@ -94,6 +94,7 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Export JPEG…', action: () => exportAs('jpeg') },
     { label: 'Export WebP…', action: () => exportAs('webp') },
     { label: 'Export BMP…', action: () => exportAs('bmp') },
+    { label: 'Export TIFF…', action: () => exportAs('tiff') },
     '-',
     { label: 'Close', shortcut: 'Ctrl+W', action: () => closeDoc(app.docs.indexOf(app.doc)) },
   ] },
@@ -368,6 +369,20 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   return { had: hasPattern(id), w: t1?.w, h: t1?.h, same: !!t1 && t1.w === t0.w && t1.h === t0.h && t1.data.every((v, i) => v === t0.data[i]), notes: d2.notes, fx: d2.layers.map((l) => l.effects?.patternOverlay).find(Boolean) };
 };
 (window as any).__defineBrushTip = () => { void defineBrushTip(); };
+(window as any).__importFileB64 = async (b64: string, name: string) => {
+  const { importFile } = await import('./io');
+  const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  const d = await importFile({ name, data: u.buffer });
+  const px = (l: Doc["layers"][number], x: number, y: number) => Array.from(l.ctx.getImageData(x, y, 1, 1).data);
+  return { w: d.width, h: d.height, name: d.name, layers: d.layers.map((l) => ({ name: l.name, visible: l.visible, p00: px(l, 0, 0), pEnd: px(l, Math.min(d.width, 16) - 1, Math.min(d.height, 12) - 1) })) };
+};
+(window as any).__tiffRoundtrip = async () => {
+  const { encode, importFile } = await import('./io');
+  const data = await encode(app.doc, 'tiff');
+  const d2 = await importFile({ name: 'rt.tif', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
+  const c = document.createElement('canvas'); c.width = d2.width; c.height = d2.height; const x = c.getContext('2d', { willReadFrequently: true })!; composite(d2, x);
+  return { w: d2.width, h: d2.height, head: Array.from(data.slice(0, 4)), px: [[10, 10], [60, 60], [150, 150]].map(([a, b]) => Array.from(x.getImageData(a, b, 1, 1).data)) };
+};
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;
 

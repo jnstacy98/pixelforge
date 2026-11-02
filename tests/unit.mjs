@@ -119,6 +119,31 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.equal(P.fromPsdAdjustment({ type: 'color lookup' }), null);
 });
 
+// ---- TIFF
+import fs from 'node:fs';
+import * as TF from '../src/tiff.ts';
+globalThis.window ??= globalThis;                         // utif2's CMYK branch probes `window` (always present in a browser)
+const tifDir = new URL('./tiff-fixtures/', import.meta.url), tifExp = JSON.parse(fs.readFileSync(new URL('expected.json', tifDir), 'utf8'));
+const tifRead = (n) => { const b = fs.readFileSync(new URL(n + '.tif', tifDir)); return TF.decodeTiff(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); };
+t('TIFF import: LZW, PackBits, Deflate, RGBA, 16-bit gray, palette and CMYK files decode to the right pixels', () => {
+  for (const [name, tol] of [['rgb-lzw', 0], ['rgb-packbits', 0], ['rgb-deflate', 0], ['rgba-deflate', 0], ['gray16', 2], ['palette', 0], ['cmyk', 3]]) {
+    const [pg] = tifRead(name); assert.deepEqual([pg.w, pg.h], [16, 12], name);
+    tifExp.pts.forEach(([x, y], i) => { const o = (y * pg.w + x) * 4, got = [...pg.rgba.slice(o, o + 4)]; assert.ok(got.every((v, k) => Math.abs(v - tifExp[name][i][k]) <= tol), `${name} (${x},${y}): ${got} vs ${tifExp[name][i]}`); });
+  }
+});
+t('TIFF import: multi-page files give every page; garbage is rejected', () => {
+  const pages = tifRead('multipage'); assert.deepEqual(pages.map((p) => [p.w, p.h]), [[16, 12], [8, 8]]); assert.deepEqual([...pages[1].rgba.slice(0, 4)], [10, 200, 30, 255]);
+  assert.throws(() => TF.decodeTiff(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer));
+});
+t('TIFF export: RGBA round trip is exact (transparency kept) and the header is a valid TIFF', () => {
+  const w = 5, h = 4, px = new Uint8ClampedArray(w * h * 4).map((_, i) => (i * 37) % 256);
+  for (let p = 0; p < w * h; p++) px[p * 4 + 3] = p % 3 === 0 ? 0 : p % 3 === 1 ? 128 : 255;
+  const out = TF.encodeTiff(px, w, h); assert.ok(['II*\0', 'MM\0*'].includes(String.fromCharCode(...out.slice(0, 4))));   // either byte order is a valid TIFF header
+  const [pg] = TF.decodeTiff(out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength));
+  assert.deepEqual([pg.w, pg.h], [w, h]);
+  for (let p = 0; p < w * h; p++) { const a = px[p * 4 + 3]; assert.equal(pg.rgba[p * 4 + 3], a); if (a) for (let c = 0; c < 3; c++) assert.ok(Math.abs(pg.rgba[p * 4 + c] - px[p * 4 + c]) <= 1, `px ${p}`); }
+});
+
 // ---- Brush tips
 import * as BT from '../src/brushtips.ts';
 t('brush tips: built-ins, tip-from-pixels (darkness vs alpha), define / lookup', () => {

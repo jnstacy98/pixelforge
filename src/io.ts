@@ -1,3 +1,4 @@
+import { decodeTiff, encodeTiff } from './tiff';
 import { getPattern, hasPattern, registerPattern } from './patterns';
 import { fromPsdRanges, isBlendIfActive, toPsdRanges } from './blendif';
 import { readPsd, writePsd, type Layer as PsdLayer, type Psd } from 'ag-psd';
@@ -6,8 +7,8 @@ import { flatten } from './render';
 import { fromPsdAdjustment, toPsdAdjustment } from './psdadjust.ts';
 import { fromPsdEffects, toPsdEffects } from './fx.ts';
 
-export type ExportFormat = 'png' | 'jpeg' | 'webp' | 'bmp' | 'psd';
-export const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'ico', 'svg'];
+export type ExportFormat = 'png' | 'jpeg' | 'webp' | 'bmp' | 'tiff' | 'psd';
+export const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'ico', 'svg', 'tif', 'tiff'];
 export const OPEN_EXTS = ['psd', 'psb', ...IMAGE_EXTS];
 
 const extOf = (name: string) => name.split('.').pop()?.toLowerCase() ?? '';
@@ -45,9 +46,27 @@ export async function importFile(file: OpenedFile): Promise<Doc> {
   const name = baseName(file.name);
   let doc: Doc;
   if (ext === 'psd' || ext === 'psb') doc = importPsd(file.data, name);
+  else if (ext === 'tif' || ext === 'tiff') doc = importTiff(file.data, name);
   else doc = await importRaster(file.data, name, ext);
   doc.path = file.path ?? null;
   doc.history.dirty = false;
+  return doc;
+}
+
+/** TIFF: every full-resolution page becomes a layer (the first one visible); the canvas is as big as the largest page. */
+function importTiff(data: ArrayBuffer, name: string): Doc {
+  let pages;
+  try { pages = decodeTiff(data); }
+  catch (e) { throw new Error(`Could not read this TIFF (${(e as Error).message}). 8/16-bit RGB, gray, palette and CMYK files with LZW, PackBits or Deflate compression are supported.`); }
+  const W = Math.max(...pages.map((p) => p.w)), H = Math.max(...pages.map((p) => p.h));
+  const doc = new Doc(W, H, name);
+  pages.forEach((p, i) => {
+    const l = new Layer(pages.length > 1 ? `Page ${i + 1}` : 'Layer 0', makeCanvas(W, H));
+    l.ctx.putImageData(new ImageData(p.rgba as Uint8ClampedArray<ArrayBuffer>, p.w, p.h), 0, 0);
+    l.visible = i === 0;
+    doc.layers.push(l);
+  });
+  doc.active = doc.layers[0];
   return doc;
 }
 
@@ -55,7 +74,7 @@ async function importRaster(data: ArrayBuffer, name: string, ext: string): Promi
   const mime: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp', avif: 'image/avif', ico: 'image/x-icon', svg: 'image/svg+xml' };
   let bmp: ImageBitmap;
   try { bmp = await createImageBitmap(new Blob([data], { type: mime[ext] ?? '' })); }
-  catch { throw new Error(`Could not decode ".${ext}" files. Supported: PSD, PNG, JPEG, WebP, GIF, BMP, AVIF, ICO, SVG.`); }
+  catch { throw new Error(`Could not decode ".${ext}" files. Supported: PSD, PNG, JPEG, WebP, GIF, BMP, TIFF, AVIF, ICO, SVG.`); }
   const doc = new Doc(bmp.width, bmp.height, name);
   const l = new Layer('Layer 0', makeCanvas(bmp.width, bmp.height));
   l.ctx.drawImage(bmp, 0, 0);
@@ -155,6 +174,7 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
   }
   const flat = flatten(doc, fmt === 'jpeg' || fmt === 'bmp' ? '#ffffff' : null);
   if (fmt === 'bmp') return encodeBmp(flat);
+  if (fmt === 'tiff') return encodeTiff(ctxOf(flat).getImageData(0, 0, flat.width, flat.height).data, flat.width, flat.height);
   const mime = fmt === 'jpeg' ? 'image/jpeg' : fmt === 'webp' ? 'image/webp' : 'image/png';
   const blob = await new Promise<Blob | null>((r) => flat.toBlob(r, mime, quality));
   if (!blob) throw new Error('Encoding failed');
@@ -178,7 +198,7 @@ function encodeBmp(c: HTMLCanvasElement): Uint8Array {
 
 export async function saveAs(doc: Doc, fmt: ExportFormat, quality?: number): Promise<boolean> {
   const data = await encode(doc, fmt, quality);
-  const ext = fmt === 'jpeg' ? 'jpg' : fmt;
+  const ext = fmt === 'jpeg' ? 'jpg' : fmt === 'tiff' ? 'tif' : fmt;
   const filename = `${doc.name}.${ext}`;
   if (window.native) {
     const p = await window.native.save(filename, ext, data);
@@ -186,7 +206,7 @@ export async function saveAs(doc: Doc, fmt: ExportFormat, quality?: number): Pro
     if (fmt === 'psd') { doc.path = p; doc.history.dirty = false; }
     return true;
   }
-  const mime = fmt === 'psd' ? 'image/vnd.adobe.photoshop' : `image/${fmt}`;
+  const mime = fmt === 'psd' ? 'image/vnd.adobe.photoshop' : fmt === 'tiff' ? 'image/tiff' : `image/${fmt}`;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([data as BlobPart], { type: mime }));
   a.download = filename; a.click();

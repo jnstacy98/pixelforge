@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs/promises');
 
 const dev = process.argv.includes('--dev');
-const OPEN_EXTS = ['psd', 'psb', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'ico', 'svg'];
+const OPEN_EXTS = ['psd', 'psb', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'ico', 'svg', 'tif', 'tiff'];
 let win;
 
 async function readFile(p) { return { name: path.basename(p), path: p, data: await fs.readFile(p) }; }
@@ -29,7 +29,7 @@ ipcMain.handle('open', async () => {
 });
 
 ipcMain.handle('save', async (_e, name, ext, data) => {
-  const labels = { psd: 'Photoshop Document', png: 'PNG', jpg: 'JPEG', webp: 'WebP', bmp: 'Bitmap' };
+  const labels = { psd: 'Photoshop Document', png: 'PNG', jpg: 'JPEG', webp: 'WebP', bmp: 'Bitmap', tif: 'TIFF' };
   const r = await dialog.showSaveDialog(win, { defaultPath: name, filters: [{ name: labels[ext] || ext, extensions: [ext] }] });
   if (r.canceled || !r.filePath) return null;
   await fs.writeFile(r.filePath, Buffer.from(data));
