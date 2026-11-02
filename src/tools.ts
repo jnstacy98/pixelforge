@@ -1,6 +1,7 @@
 import { app, hexToRgb, rgbToHex, paintColor, grayOf, type ToolId } from './state';
 import { TextTool } from './texttool';
 import { getTip } from './brushtips';
+import { quantTilt, tiltShape } from './tilt';
 import { MarqueeTool, LassoTool, WandTool, QuickSelectTool } from './selecttools';
 import { clipToSelection, selectedFlags } from './selection';
 import { floodSelect } from './flood';
@@ -10,7 +11,7 @@ import { ContentMoveTool, PatchTool } from './patchtool';
 import { Layer, cloneCanvas, clampRect, ctxOf, makeCanvas, pushPixelEdit, type Rect } from './doc';
 import { flatten } from './render';
 
-export interface Pt { x: number; y: number; pressure: number }
+export interface Pt { x: number; y: number; pressure: number; tiltX?: number; tiltY?: number }
 export interface Tool {
   cursor: string;
   down(p: Pt, e: PointerEvent): void;
@@ -40,7 +41,25 @@ function tipCanvas(tipId: string, color: string) {
   tipCache.set(key, c);
   return c;
 }
-function getStamp(size: number, hardness: number, color: string, tipId = 'round', angle = 0) {
+const tiltCache = new Map<string, HTMLCanvasElement>();
+/** The brush stamp, optionally squashed into an ellipse by pen tilt. */
+function getStamp(size: number, hardness: number, color: string, tipId = 'round', angle = 0, tilt?: { az: number; stretch: number }) {
+  const base = baseStamp(size, hardness, color, tipId, angle);
+  if (!tilt || tilt.stretch <= 1.05) return base;
+  const key = `${size}|${hardness.toFixed(2)}|${color}|${tipId}|${angle}|${tilt.az}|${tilt.stretch}`;
+  let s = tiltCache.get(key);
+  if (s) return s;
+  if (tiltCache.size > 200) tiltCache.clear();
+  const d = Math.ceil(base.width * tilt.stretch) + 2;
+  s = makeCanvas(d, d);
+  const x = ctxOf(s);
+  x.imageSmoothingQuality = 'high';
+  x.translate(d / 2, d / 2); x.rotate((tilt.az * Math.PI) / 180); x.scale(tilt.stretch, 1);
+  x.drawImage(base, -base.width / 2, -base.height / 2);
+  tiltCache.set(key, s);
+  return s;
+}
+function baseStamp(size: number, hardness: number, color: string, tipId = 'round', angle = 0) {
   const tip = getTip(tipId);
   const key = `${size}|${hardness.toFixed(2)}|${color}|${tip ? tipId + '|' + angle : ''}`;
   let s = stampCache.get(key);
@@ -164,12 +183,13 @@ class PaintTool implements Tool {
 
   private dab(p: Pt, pressureOn = true, dir = 0) {
     const b = app.brush;
+    const tilt = b.tilt && (p.tiltX || p.tiltY) ? quantTilt(tiltShape(p.tiltX ?? 0, p.tiltY ?? 0)) : undefined;
     const size = b.size * (pressureOn && p.pressure > 0 && p.pressure < 1 ? Math.max(0.15, p.pressure) : 1);
     let img: HTMLCanvasElement, x: number, y: number;
     if (this.isClone) ({ img, x, y } = this.cloneStamp(p, size));
     else {
       const color = this.isSpot ? '#000000' : this.onMask ? grayOf(this.erase ? app.bg : app.fg) : this.erase ? '#000000' : app.fg;
-      img = getStamp(Math.max(1, Math.round(size)), b.hardness, color, b.tip, this.angleFor(dir));
+      img = getStamp(Math.max(1, Math.round(size)), b.hardness, color, b.tip, this.angleFor(dir), tilt);
       x = p.x - img.width / 2; y = p.y - img.height / 2;
     }
     const ctx = ctxOf(strokeCanvas!);
@@ -251,7 +271,7 @@ class PaintTool implements Tool {
     const dir = (Math.atan2(dy, dx) * 180) / Math.PI;
     while (pos <= d) {
       const t = pos / d;
-      this.dab({ x: this.last.x + dx * t, y: this.last.y + dy * t, pressure: this.last.pressure + (p.pressure - this.last.pressure) * t }, true, dir);
+      this.dab({ x: this.last.x + dx * t, y: this.last.y + dy * t, pressure: this.last.pressure + (p.pressure - this.last.pressure) * t, tiltX: p.tiltX, tiltY: p.tiltY }, true, dir);
       pos += step;
     }
     this.carry = pos - d;

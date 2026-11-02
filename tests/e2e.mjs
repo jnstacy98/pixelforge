@@ -1722,6 +1722,24 @@ await page.evaluate(() => { window.__blank(200, 200); const d = window.__app.doc
 const trt = await page.evaluate(() => window.__tiffRoundtrip());
 assert.deepEqual([trt.w, trt.h], [200, 200]); assert.deepEqual(trt.px[0], [48, 112, 192, 255]); assert.equal(trt.px[2][3], 0); assert.ok(near(trt.px[1], [124, 76, 116, 255], 3), `overlap ${trt.px[1]}`); ok('TIFF export → import round-trips the composite, including transparency');
 
+// 6x. pen tilt
+const penStroke = (x, y, tiltX, tiltY) => page.evaluate(([x, y, tx, ty]) => {
+  const st = document.getElementById('stage'), r = st.getBoundingClientRect(), z = window.__app.view;
+  const cx = r.left + z.panX + x * z.zoom, cy = r.top + z.panY + y * z.zoom;
+  const ev = (type, buttons) => new PointerEvent(type, { pointerId: 9, pointerType: 'pen', pressure: 1, tiltX: tx, tiltY: ty, clientX: cx, clientY: cy, button: 0, buttons, bubbles: true });
+  st.dispatchEvent(ev('pointerdown', 1)); st.dispatchEvent(ev('pointerup', 0));
+}, [x, y, tiltX, tiltY]);
+await page.evaluate(() => { window.__blank(400, 300); const a = window.__app; a.fg = '#ff0000'; Object.assign(a.brush, { size: 20, hardness: 1, opacity: 1, flow: 1, spacing: 0.25, tip: 'round', angle: 0, follow: false, tilt: true }); a.doc.setSelection(null); a.setTool('brush'); });
+await wait();
+await penStroke(100, 100, 0, 0); await wait();
+assert.equal(await redAt(100, 100), true); assert.equal(await redAt(115, 100), false); ok('an upright pen leaves a round dab');
+await penStroke(250, 100, 60, 0); await wait();
+assert.equal(await redAt(265, 100), true); assert.equal(await redAt(250, 114), false); ok('a pen tilted along x leaves an ellipse stretched along x (twice as wide as tall)');
+await penStroke(100, 200, 0, 60); await wait();
+assert.equal(await redAt(100, 215), true); assert.equal(await redAt(115, 200), false); ok('tilting along y stretches the dab vertically');
+await page.evaluate(() => { window.__app.brush.tilt = false; }); await penStroke(250, 200, 60, 0); await wait();
+assert.equal(await redAt(250, 200), true); assert.equal(await redAt(265, 200), false); ok('with "Pen tilt" switched off the dab stays round');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

@@ -119,6 +119,19 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.equal(P.fromPsdAdjustment({ type: 'color lookup' }), null);
 });
 
+// ---- pen tilt
+import * as TL from '../src/tilt.ts';
+t('pen tilt: upright is round; leaning stretches the dab along the lean direction', () => {
+  assert.deepEqual(TL.tiltShape(0, 0), { az: 0, stretch: 1 });
+  const x = TL.tiltShape(60, 0); assert.ok(Math.abs(x.az) < 1e-6 && Math.abs(x.stretch - 2) < 1e-6);
+  const y = TL.tiltShape(0, 60); assert.ok(Math.abs(y.az - 90) < 1e-6 && Math.abs(y.stretch - 2) < 1e-6);
+  const nx = TL.tiltShape(-60, 0); assert.ok(Math.abs(Math.abs(nx.az) - 180) < 1e-6);
+  assert.ok(TL.tiltShape(30, 30).stretch > TL.tiltShape(30, 0).stretch);          // leaning two ways is a bigger lean
+  assert.equal(TL.tiltShape(89, 89).stretch, 3);                                  // capped
+  assert.ok(Number.isFinite(TL.tiltShape(90, -90).stretch));
+  assert.deepEqual(TL.quantTilt({ az: -3, stretch: 1.96 }), { az: 0, stretch: 2 });
+});
+
 // ---- TIFF
 import fs from 'node:fs';
 import * as TF from '../src/tiff.ts';

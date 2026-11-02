@@ -106,13 +106,13 @@ export class Viewer {
 
   private pt(e: PointerEvent): Pt {
     const d = this.toDoc(e);
-    return { x: d.x, y: d.y, pressure: e.pointerType === 'pen' ? e.pressure : 1 };
+    return { x: d.x, y: d.y, pressure: e.pointerType === 'pen' ? e.pressure : 1, ...(e.pointerType === 'pen' ? { tiltX: e.tiltX, tiltY: e.tiltY } : {}) };
   }
   private handMode(e: PointerEvent) { return e.button === 1 || this.spaceDown || app.toolId === 'hand'; }
 
   private onDown(e: PointerEvent) {
     if (!this.doc || (e.target as HTMLElement).tagName === 'TEXTAREA') return;
-    this.stage.setPointerCapture(e.pointerId);
+    try { this.stage.setPointerCapture(e.pointerId); } catch { /* synthetic pointers can't be captured */ }
     if (this.handMode(e)) {
       this.panning = { x: e.clientX, y: e.clientY, px: this.panX, py: this.panY };
       this.stage.style.cursor = 'grabbing'; return;

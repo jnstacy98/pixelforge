@@ -77,7 +77,8 @@ export function renderOptions() {
     ts.className = 'tipsel';
     ts.innerHTML = `<option value="${ROUND}">Round (soft)</option>` + allTips().map((x) => `<option value="${x.id}">${x.name.replace(/[<&"]/g, '')}</option>`).join('');
     ts.value = allTips().some((x) => x.id === b.tip) ? b.tip : ROUND; ts.onchange = () => { b.tip = ts.value; renderOptions(); app.emit('options'); }; tl.append('Tip', ts);
-    el.append(tl);
+    const pl = document.createElement('label'), pc = document.createElement('input'); pc.type = 'checkbox'; pc.checked = b.tilt; pc.onchange = () => (b.tilt = pc.checked); pl.append(pc, 'Pen tilt');
+    el.append(tl, pl);
     if (b.tip !== ROUND) {
       const fl = document.createElement('label'), fc = document.createElement('input'); fc.type = 'checkbox'; fc.checked = b.follow; fc.onchange = () => (b.follow = fc.checked); fl.append(fc, 'Follow stroke');
       el.append(slider('Angle', () => b.angle, (v) => (b.angle = v), 0, 359, 1, (v) => v + '°'), fl,
