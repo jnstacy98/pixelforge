@@ -23,6 +23,8 @@ input[type=range] { accent-color: var(--accent); }
 #options input[type=range] { width: 110px; }
 
 #main { flex: 1; display: flex; min-height: 0; }
+#dock-top, #dock-bottom { display: flex; flex-direction: column; } #dock-left, #dock-right { display: flex; min-height: 0; }
+#dock-top > #options, #dock-top > #toolbar { order: 0; } #dock-top > #toolbar { order: 1; } #dock-bottom > #toolbar { order: 0; } #dock-bottom > #options { order: 1; border-bottom: 0; border-top: 1px solid var(--line); }
 #toolbar { width: 44px; background: var(--bg1); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; padding: 6px 0; gap: 4px; }
 .tool { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 6px; cursor: pointer; color: var(--dim); }
 .tool:hover { background: var(--bg3); color: var(--fg); } .tool.active { background: var(--accent); color: #fff; }
@@ -116,3 +118,23 @@ input[type=range] { accent-color: var(--accent); }
 .smartbadge { position: absolute; right: 0; bottom: 0; background: #1a6fd1; color: #fff; font-size: 10px; line-height: 12px; width: 13px; text-align: center; border-top-left-radius: 3px; pointer-events: none; }
 
 .texteditor.pathtext { background: rgba(255,255,255,.95); border: 1px solid #1a6fd1; border-radius: 3px; padding: 3px 6px; resize: none; overflow: hidden; z-index: 5; }
+
+/* movable toolbar */
+#toolbar { overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+#toolbar .grip { flex: none; width: 30px; height: 10px; margin-bottom: 2px; cursor: grab; border-radius: 3px; background: radial-gradient(circle, var(--dim) 1px, transparent 1.5px) 0 0 / 6px 6px; opacity: .6; touch-action: none; }
+#toolbar .grip:hover { opacity: 1; background-color: var(--bg3); }
+#toolbar.dock-right { border-right: 0; border-left: 1px solid var(--line); }
+#toolbar.dock-top, #toolbar.dock-bottom { width: 100%; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; padding: 3px 8px; border-right: 0; overflow: visible; }
+#toolbar.dock-top { border-bottom: 1px solid var(--line); } #toolbar.dock-bottom { border-top: 1px solid var(--line); }
+#toolbar.dock-top .grip, #toolbar.dock-bottom .grip { width: 10px; height: 30px; margin: 0 2px 0 0; }
+#toolbar.dock-top .swatches, #toolbar.dock-bottom .swatches { margin: 0 0 0 auto; }
+#toolbar.float { position: fixed; z-index: 120; width: auto; max-height: calc(100vh - 16px); flex-direction: column; flex-wrap: wrap; align-content: flex-start; padding: 6px; overflow: visible; background: var(--bg1); border: 1px solid #000; border-radius: 8px; box-shadow: 0 10px 30px #000a; }
+#toolbar.float .swatches { margin-top: 4px; }
+#toolbar.dragging { opacity: .85; pointer-events: none; }
+#toolbar.dragging .grip { pointer-events: auto; }
+.dockhint { position: fixed; z-index: 119; display: none; background: #3b82f622; border: 2px dashed #3b82f655; pointer-events: none; }
+.dockhint.show { display: block; } .dockhint.hot { background: #3b82f655; border-color: var(--accent); }
+.dockhint.left { left: 0; top: 0; bottom: 0; width: 70px; } .dockhint.right { right: 0; top: 0; bottom: 0; width: 70px; }
+.dockhint.top { left: 0; right: 0; top: 0; height: 70px; } .dockhint.bottom { left: 0; right: 0; bottom: 0; height: 70px; }
+.cust-list { display: grid; max-height: 55vh; overflow-y: auto; background: var(--bg0); border: 1px solid var(--line); border-radius: 4px; }
+.cust-row { display: flex; align-items: center; gap: 8px; padding: 2px 8px; border-bottom: 1px solid #1a1a1a; } .cust-row .tool { cursor: default; } .cust-row button { padding: 0 6px; }

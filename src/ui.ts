@@ -16,7 +16,7 @@ import { ADJUSTMENT_LABELS, type AdjustmentType } from './adjust';
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const svg = (p: string) => `<svg viewBox="0 0 24 24">${p}</svg>`;
 
-const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
+export const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
   { id: 'move', key: 'V', label: 'Move', icon: svg('<path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20"/>') },
   { id: 'marquee', key: 'M', label: 'Rectangular Marquee', icon: svg('<rect x="4" y="4" width="16" height="16" stroke-dasharray="3 3"/>') },
   { id: 'lasso', key: 'L', label: 'Lasso', icon: svg('<path d="M7 22a5 5 0 01-2-4"/><path d="M3.3 14A6.8 6.8 0 012 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 01-5-1"/><circle cx="5" cy="19" r="2"/>') },
@@ -38,14 +38,25 @@ const TOOLS: { id: ToolId; key: string; label: string; icon: string }[] = [
 ];
 export const toolKeys: Record<string, ToolId> = Object.fromEntries(TOOLS.map((t) => [t.key.toLowerCase(), t.id]));
 
-export function initToolbar() {
+/** (Re)build the tool buttons in the given order; the grip and colour swatches stay put. */
+export function setToolbarTools(ids: string[]) {
   const bar = $('toolbar');
-  for (const t of TOOLS) {
+  bar.querySelectorAll('.tool').forEach((el) => el.remove());
+  const before = bar.querySelector('.swatches');
+  const byId = new Map(TOOLS.map((t) => [t.id as string, t]));
+  for (const id of ids) {
+    const t = byId.get(id); if (!t) continue;
     const el = document.createElement('div');
     el.className = 'tool'; el.dataset.tool = t.id; el.title = `${t.label} (${t.key})`; el.innerHTML = t.icon;
     el.onclick = () => app.setTool(t.id);
-    bar.append(el);
+    el.classList.toggle('active', t.id === app.toolId);
+    bar.insertBefore(el, before);
   }
+}
+
+export function initToolbar() {
+  const bar = $('toolbar');
+  setToolbarTools(TOOLS.map((t) => t.id));
   const sw = document.createElement('div');
   sw.className = 'swatches';
   sw.innerHTML = `<input type="color" class="bg" id="bgc" title="Background color"><input type="color" class="fg" id="fgc" title="Foreground color"><span class="swap" title="Swap (X)">⇄</span>`;
