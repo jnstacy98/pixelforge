@@ -225,6 +225,28 @@ t('bezier paths: curve commands, control-hull bounds, smoothing, inserting ancho
   const cl = SH.cloneShape(p); cl.curves[0].o[0] = 999; assert.equal(p.curves[0].o[0], 20);
 });
 
+import * as SO from '../src/shapeops.ts';
+t('boolean shape operations: unite / subtract / intersect / exclude areas, holes, curves, open paths, style', () => {
+  const sq = (x, y, w, h, extra = {}) => SH.makeShape('rect', w, h, x, y, extra), area = (s) => SO.compoundArea(s);
+  const A = sq(0, 0, 100, 100, { fill: '#112233', stroke: '#445566', strokeW: 3 }), B = sq(50, 50, 100, 100);
+  assert.ok(Math.abs(area(SO.combineShapes('unite', [A, B])) - 17500) < 1e-6);
+  assert.ok(Math.abs(area(SO.combineShapes('intersect', [A, B])) - 2500) < 1e-6);
+  assert.ok(Math.abs(area(SO.combineShapes('subtract', [A, B])) - 7500) < 1e-6);
+  assert.ok(Math.abs(area(SO.combineShapes('subtract', [B, A])) - 7500) < 1e-6);                                                                                                       // order matters: B minus A
+  assert.ok(Math.abs(area(SO.combineShapes('exclude', [A, B])) - 15000) < 1e-6);
+  const u = SO.combineShapes('unite', [A, B]); assert.equal(u.kind, 'compound'); assert.deepEqual([u.fill, u.stroke, u.strokeW], ['#112233', '#445566', 3]); assert.deepEqual([u.T[4], u.T[5], u.w, u.h], [0, 0, 150, 150]);   // first shape's style
+  const hole = SO.combineShapes('subtract', [sq(0, 0, 100, 100), sq(25, 25, 50, 50)]); assert.equal(hole.contours.length, 2); assert.ok(Math.abs(area(hole) - 7500) < 1e-6);                      // a hole is a second ring
+  assert.equal(SO.combineShapes('intersect', [sq(0, 0, 10, 10), sq(50, 50, 10, 10)]), null);                                                                                                  // nothing overlaps → nothing left
+  assert.equal(SO.combineShapes('unite', [A]), null);
+  assert.equal(SO.combineShapes('unite', [A, SH.shapeFromPoints([[0, 0], [10, 10]], false)]), null);                                                                                           // open paths refuse
+  const circ = SH.makeShape('ellipse', 100, 100, 0, 0), flat = SO.flattenShape(circ)[0]; assert.ok(flat.length > 60);
+  const ca = area(SO.combineShapes('unite', [circ, sq(200, 200, 1, 1)])); assert.ok(Math.abs(ca - (Math.PI * 2500 + 1)) < 25, `circle area ${ca}`);                                           // curves flatten finely
+  const moved = SH.translateShape(B, 10, 0); assert.ok(Math.abs(area(SO.combineShapes('intersect', [A, moved])) - 2000) < 1e-6);                                                                 // honours each shape's matrix
+  const three = SO.combineShapes('unite', [A, B, sq(120, 0, 30, 30)]); assert.ok(area(three) > 17500);
+  const cmds = SH.shapeCmds(hole); assert.equal(cmds.filter((c) => c[0] === 'M').length, 2); assert.equal(cmds.filter((c) => c[0] === 'Z').length, 2);
+  assert.equal(SH.cloneShape(hole).contours.length, 2); const cl = SH.cloneShape(hole); cl.contours[0][0][0] = 999; assert.notEqual(hole.contours[0][0][0], 999);
+});
+
 // ---- smart objects
 import * as SM from '../src/smartmath.ts';
 t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {

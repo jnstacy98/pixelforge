@@ -1979,6 +1979,36 @@ await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.
 await page.evaluate(() => window.__xform.set({ sx: 2, sy: 2 })); await page.keyboard.press('Enter'); await wait();
 bz = await topShape(); assert.ok(Math.abs(bz.T[0] - 2) < 1e-6 && bz.curves[0]); ok('Free Transform scales a curved path through its matrix (handles included)');
 
+// 6ac. combine shapes
+await shScene('rect'); await shDrag([100, 100], [200, 160]); await shDrag([150, 130], [250, 190]);
+const nBefore = await page.evaluate(() => window.__app.doc.layers.length);
+await page.evaluate(() => { const d = window.__app.doc, shapes = d.layers.filter((l) => l.shape); d.multi = new Set([shapes[0], shapes[1]]); d.active = shapes[1]; d.emit('structure'); });
+await wait();
+await page.locator('#menubar .menu .title:text-is("Layer")').click();
+assert.ok(await page.evaluate(() => [...document.querySelectorAll('#menubar .menu.open .mi')].map((e) => e.textContent).filter((t) => t.startsWith('Combine Shapes')).length === 4)); ok('with two shape layers selected the Layer menu offers Unite, Subtract, Intersect and Exclude Overlap');
+await page.locator('#menubar .menu.open .mi:has-text("Combine Shapes: Subtract")').click(); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.layers.length), nBefore - 1); const cs = await topShape(); assert.ok(cs && cs.kind === 'compound' && cs.contours.length === 1); ok('Subtract replaces the two layers by one compound shape layer');
+assert.equal((await shPx(110, 110))[3], 255); assert.equal((await shPx(190, 150))[3], 0); assert.equal((await shPx(240, 180))[3], 0); assert.equal((await shPx(160, 105))[3], 255); ok('…the bottom shape minus the upper one: the overlap is cut out, the second shape alone leaves nothing');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Subtract Shapes');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.layers.length), nBefore); ok('one undo step brings both original shapes back');
+await page.evaluate(() => { const d = window.__app.doc, shapes = d.layers.filter((l) => l.shape); d.multi = new Set([shapes[0], shapes[1]]); d.active = shapes[1]; d.emit('structure'); window.__combine('unite'); }); await wait();
+assert.equal((await shPx(190, 150))[3], 255); assert.equal((await shPx(240, 180))[3], 255); assert.equal((await shPx(105, 185))[3], 0); ok('Unite merges the outlines into one shape');
+// the combined shape is still a shape: scale it with Free Transform and the edges stay sharp
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+await page.evaluate(() => window.__xform.set({ sx: 2, sy: 2 })); await page.keyboard.press('Enter'); await wait();
+assert.ok((await topShape()).kind === 'compound' && Math.abs((await topShape()).T[0] - 2) < 1e-6); ok('a combined shape can be moved and scaled like any other (matrix only)');
+// a hole: subtract a small circle from a big rectangle
+await shScene('rect'); await shDrag([100, 100], [250, 220]);
+await page.evaluate(() => { window.__app.shape.kind = 'ellipse'; }); await shDrag([140, 130], [210, 190]);
+await page.evaluate(() => { const d = window.__app.doc, shapes = d.layers.filter((l) => l.shape); d.multi = new Set([shapes[0], shapes[1]]); d.active = shapes[1]; window.__combine('subtract'); }); await wait();
+const holeS = await topShape(); assert.equal(holeS.contours.length, 2); assert.equal((await shPx(175, 160))[3], 0); assert.equal((await shPx(110, 110))[3], 255); ok('subtracting a circle from a rectangle leaves a real hole (two rings, even-odd fill)');
+// open paths are refused
+await shScene('line', { useStroke: true }); await shDrag([100, 100], [200, 100]); await page.evaluate(() => { window.__app.shape.kind = 'rect'; }); await shDrag([120, 80], [160, 130]);
+const n3 = await page.evaluate(() => window.__app.doc.layers.length);
+await page.evaluate(() => { const d = window.__app.doc, shapes = d.layers.filter((l) => l.shape); d.multi = new Set([shapes[0], shapes[1]]); d.active = shapes[1]; window.__combine('unite'); }); await wait();
+assert.equal(await page.evaluate(() => window.__app.doc.layers.length), n3); ok('open paths (lines) refuse to combine and leave the layers alone');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

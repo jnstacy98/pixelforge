@@ -71,6 +71,7 @@
   },
   "dependencies": {
     "ag-psd": "^34.1.0",
+    "polygon-clipping": "^0.15.7",
     "utif2": "^4.1.0"
   }
 }

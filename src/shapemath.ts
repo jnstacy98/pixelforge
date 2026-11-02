@@ -1,7 +1,7 @@
 // Vector shape layers: geometry as exact path commands (pure; unit-tested). A shape lives in its own local box
 // (0,0)–(w,h); `T` is the affine matrix [a b c d e f] taking local points to document points, so moving, scaling and
 // rotating a shape never degrades it — the layer's pixels are simply re-rendered from this data.
-export type ShapeKind = 'rect' | 'ellipse' | 'polygon' | 'star' | 'path';
+export type ShapeKind = 'rect' | 'ellipse' | 'polygon' | 'star' | 'path' | 'compound';
 export interface Handles { i: [number, number]; o: [number, number] }
 export type Mat = [number, number, number, number, number, number];
 export interface ShapeData {
@@ -14,6 +14,8 @@ export interface ShapeData {
   pts: [number, number][];   // path anchor points (local)
   /** Bézier handles per anchor, as offsets from it (null = corner). Same length as `pts` when present. */
   curves?: (Handles | null)[];
+  /** Compound shapes (results of Combine Shapes): closed polygon rings in local coordinates, filled with the even-odd rule. */
+  contours?: [number, number][][];
   closed: boolean;
   fill: string | null;
   stroke: string | null;
@@ -23,8 +25,8 @@ export type Cmd = ['M', number, number] | ['L', number, number] | ['C', number, 
 export const IDENTITY: Mat = [1, 0, 0, 1, 0, 0];
 const K = 0.5522847498;      // cubic Bézier circle constant
 
-export const cloneShape = (s: ShapeData | null): ShapeData | null => (s ? { ...s, T: [...s.T] as Mat, pts: s.pts.map((p) => [...p] as [number, number]), ...(s.curves ? { curves: s.curves.map((c) => (c ? { i: [...c.i] as [number, number], o: [...c.o] as [number, number] } : null)) } : {}) } : null);
-export const SHAPE_LABELS: Record<ShapeKind, string> = { rect: 'Rectangle', ellipse: 'Ellipse', polygon: 'Polygon', star: 'Star', path: 'Path' };
+export const cloneShape = (s: ShapeData | null): ShapeData | null => (s ? { ...s, T: [...s.T] as Mat, pts: s.pts.map((p) => [...p] as [number, number]), ...(s.contours ? { contours: s.contours.map((r) => r.map((p) => [...p] as [number, number])) } : {}), ...(s.curves ? { curves: s.curves.map((c) => (c ? { i: [...c.i] as [number, number], o: [...c.o] as [number, number] } : null)) } : {}) } : null);
+export const SHAPE_LABELS: Record<ShapeKind, string> = { rect: 'Rectangle', ellipse: 'Ellipse', polygon: 'Polygon', star: 'Star', path: 'Path', compound: 'Combined Shape' };
 
 export function makeShape(kind: ShapeKind, w: number, h: number, x: number, y: number, style: Partial<ShapeData> = {}): ShapeData {
   return { kind, w, h, T: [1, 0, 0, 1, x, y], radius: 0, sides: 5, inner: 0.5, pts: [], closed: true, fill: '#3a7bd5', stroke: null, strokeW: 4, ...style };
@@ -54,6 +56,9 @@ export function localCmds(s: ShapeData): Cmd[] {
       out.push(['Z']);
       return out;
     }
+    case 'compound':
+      for (const ring of s.contours ?? []) { ring.forEach(([x, y], i) => out.push([i ? 'L' : 'M', x, y])); if (ring.length) out.push(['Z']); }
+      return out;
     case 'path': {
       const n = s.pts.length, closed = s.closed && n > 2, cv = s.curves;
       if (!n) return out;

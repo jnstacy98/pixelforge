@@ -13,6 +13,7 @@ import { defaultFx, FX_TUNE } from './fx';
 import { composite } from './render';
 import { editor } from './texttool';
 import { freeTransform, startFreeTransform } from './freetransform';
+import { COMBINE_OPS, combineSelected } from './shape';
 import { convertToSmart, editContents, isSmart, rasterizeSmart, transformSmart, updateSmart } from './smart';
 import { defineBrushTip } from './definetip';
 import { loadSavedTips } from './brushtips';
@@ -164,6 +165,7 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Paste Layer Style', action: pasteStyle },
     { label: 'Clear Layer Style', action: clearStyle },
     '-',
+    ...(app.doc.selectedLayers().filter((l) => l.shape).length >= 2 ? COMBINE_OPS.map(([op, label]) => ({ label: `Combine Shapes: ${label}`, action: () => combineSelected(op) })) : []),
     ...(app.doc.active.shape ? [{ label: 'Shape Properties…', action: () => app.setTool('shape') }, { label: 'Rasterize Shape', action: () => app.doc.editShape('Rasterize Shape', app.doc.active, () => { app.doc.active.shape = null; }) }] : []),
     ...(app.doc.active.smart ? [
       { label: 'Smart Object: Edit Contents', action: () => editContents(app.doc, app.doc.active, (d) => addDoc(d)) },
@@ -402,6 +404,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   return { w: d2.width, h: d2.height, head: Array.from(data.slice(0, 4)), px: [[10, 10], [60, 60], [150, 150]].map(([a, b]) => Array.from(x.getImageData(a, b, 1, 1).data)) };
 };
 (window as any).__xform = freeTransform;
+(window as any).__combine = combineSelected;
 (window as any).__smartApi = { isSmart, convertToSmart, editContents, updateSmart, transformSmart, rasterizeSmart };
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;

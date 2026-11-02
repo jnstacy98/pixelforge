@@ -4,6 +4,7 @@ import { ctxOf } from './doc';
 import type { Pt, Tool } from './tools';
 import { apply, autoSmooth, cloneShape, insertAnchor, invertMat, nearestOnPath, normalizePath, shapeCmds, shapeFromDrag, shapeFromPoints, SHAPE_LABELS, type Cmd, type Handles, type ShapeData, type ShapeKind } from './shapemath';
 import { cloneCanvas, type Layer } from './doc';
+import { combineShapes, type BoolOp } from './shapeops';
 
 const pathOf = (cmds: Cmd[]) => {
   const p = new Path2D();
@@ -15,7 +16,7 @@ export function renderShape(canvas: HTMLCanvasElement, s: ShapeData) {
   const ctx = ctxOf(canvas);
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height);
   const p = pathOf(shapeCmds(s));
-  if (s.fill) { ctx.fillStyle = s.fill; ctx.fill(p, 'nonzero'); }
+  if (s.fill) { ctx.fillStyle = s.fill; ctx.fill(p, s.kind === 'compound' ? 'evenodd' : 'nonzero'); }
   if (s.stroke && s.strokeW > 0) { ctx.strokeStyle = s.stroke; ctx.lineWidth = s.strokeW; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke(p); }
   ctx.restore();
 }
@@ -198,3 +199,14 @@ class ShapeToolImpl implements Tool {
   }
 }
 export const shapeTool = new ShapeToolImpl();
+
+const OP_LABEL: Record<BoolOp, string> = { unite: 'Unite Shapes', subtract: 'Subtract Shapes', intersect: 'Intersect Shapes', exclude: 'Exclude Overlap' };
+/** Layer ▸ Combine Shapes: boolean operation on the selected shape layers (stack order: the lowest is the subject). */
+export function combineSelected(op: BoolOp) {
+  const doc = app.doc, layers = doc.selectedLayers().filter((l) => l.shape).sort((a, b) => doc.layers.indexOf(a) - doc.layers.indexOf(b));
+  if (layers.length < 2) return app.toast('Select two or more shape layers first (Ctrl+click or Shift+click in the Layers panel)');
+  const r = combineShapes(op, layers.map((l) => l.shape!));
+  if (!r) return app.toast(layers.some((l) => l.shape!.kind === 'path' && !l.shape!.closed) ? 'Open paths can\'t be combined — close them first' : 'Nothing is left after combining these shapes');
+  doc.combineShapes(layers, r, renderShape, OP_LABEL[op]);
+}
+export const COMBINE_OPS: [BoolOp, string][] = [['unite', 'Unite'], ['subtract', 'Subtract'], ['intersect', 'Intersect'], ['exclude', 'Exclude Overlap']];

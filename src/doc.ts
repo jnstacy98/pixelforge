@@ -667,6 +667,20 @@ export class Doc {
     this.emit('structure');
     return l;
   }
+  /** Replace several shape layers by one combined shape (placed where the lowest was). */
+  combineShapes(layers: Layer[], result: ShapeData, render: (canvas: HTMLCanvasElement, s: ShapeData) => void, label: string) {
+    const set = new Set(layers), lowest = this.layers.find((l) => set.has(l))!;
+    const n = new Layer(`Combined Shape`, makeCanvas(this.width, this.height));
+    n.shape = cloneShape(result); render(n.canvas, n.shape!);
+    n.parent = lowest.parent; n.opacity = lowest.opacity; n.blend = lowest.blend; n.effects = cloneFx(lowest.effects);
+    this.structEdit(label, () => {
+      const at = this.layers.indexOf(lowest);
+      this.layers = this.layers.filter((l) => !set.has(l));
+      this.layers.splice(Math.min(at, this.layers.length), 0, n);
+      this.active = n; this.multi.clear();
+    });
+    return n;
+  }
   /** A new vector shape layer on top of the active layer. */
   createShapeLayer(s: ShapeData, name: string, render: (canvas: HTMLCanvasElement, s: ShapeData) => void) {
     const l = this.addLayer(name);
