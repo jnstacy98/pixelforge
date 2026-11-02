@@ -2328,6 +2328,15 @@ assert.equal(await page.evaluate(() => document.querySelector('.tool[data-tool="
 assert.equal(await page.evaluate(() => { const o = [...document.querySelectorAll('#toolbar .tool')].map((e) => e.dataset.tool); return o.indexOf('hand') < o.indexOf('eyedropper'); }), true); ok('reordering moves the tool');
 await page.click('.tbcust button:has-text("Reset")'); await page.click('.tbcust button.primary'); await wait();
 bb = await barBox(); assert.equal(bb.host, 'dock-left'); assert.ok(await page.evaluate(() => !!document.querySelector('.tool[data-tool="lasso"]'))); ok('Reset restores the default layout');
+// options bar grip survives re-rendering and drags between top and bottom
+await page.evaluate(() => { window.__layout.reset(); window.__app.setTool('eraser'); window.__app.setTool('brush'); });
+assert.equal(await page.evaluate(() => document.querySelectorAll('#options .grip').length), 1); ok('options bar keeps its grip when the tool changes');
+const og = await page.evaluate(() => { const r = document.querySelector('#options .grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+await page.mouse.move(og.x, og.y); await page.mouse.down(); await page.mouse.move(og.x + 40, 700, { steps: 6 }); await page.mouse.up(); await wait();
+assert.equal(await page.evaluate(() => document.getElementById('options').parentElement.id), 'dock-bottom'); ok('dragging the options grip to the lower half docks the options bar at the bottom');
+const ogUp = await page.evaluate(() => { const r = document.querySelector('#options .grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+await page.mouse.move(ogUp.x, ogUp.y); await page.mouse.down(); await page.mouse.move(ogUp.x + 40, 100, { steps: 6 }); await page.mouse.up(); await wait();
+assert.equal(await page.evaluate(() => document.getElementById('options').parentElement.id), 'dock-top'); ok('…and dragging it back to the upper half returns it to the top');
 await page.evaluate(() => window.__app.setTool('brush'));
 
 // 7. open PNG via file drop path

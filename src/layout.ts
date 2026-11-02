@@ -47,14 +47,38 @@ export function moveTool(id: string, delta: number) {
   layout.order = moveItem(layout.order, i, i + delta); commit();
 }
 
-// ---------------------------------------------------------------- dragging the grip
+// ---------------------------------------------------------------- dragging the grips
+const hints = DOCKS.map((d) => { const h = document.createElement('div'); h.className = 'dockhint ' + d; h.dataset.dock = d; document.body.append(h); return h; });
+function showHints(active: Dock | null | false, only?: Dock[]) {
+  hints.forEach((h) => { const d = h.dataset.dock as Dock; h.classList.toggle('show', active !== false && (!only || only.includes(d))); h.classList.toggle('hot', d === active); });
+}
+/** Drag the options bar by its grip: the top or bottom half of the window decides where it docks. */
+function initOptionsGrip() {
+  const opts = $('options');
+  const grip = document.createElement('div');
+  grip.className = 'grip'; grip.title = 'Drag to move the options bar to the top or bottom of the window';
+  opts.prepend(grip);
+  grip.onpointerdown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); grip.setPointerCapture(e.pointerId);
+    const sx = e.clientX, sy = e.clientY; let moved = false, zone: Dock = layout.options;
+    grip.classList.add('dragging');
+    grip.onpointermove = (ev) => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+      moved = true; zone = ev.clientY < innerHeight / 2 ? 'top' : 'bottom'; showHints(zone, ['top', 'bottom']);
+    };
+    grip.onpointerup = grip.onpointercancel = () => {
+      grip.onpointermove = grip.onpointerup = grip.onpointercancel = null; grip.classList.remove('dragging'); showHints(false);
+      if (moved && zone !== layout.options) setOptionsDock(zone as 'top' | 'bottom');
+    };
+  };
+}
+
 function initGrip() {
   const bar = $('toolbar');
   const grip = document.createElement('div');
   grip.className = 'grip'; grip.title = 'Drag to move the toolbar — drop on a window edge to dock it, elsewhere to float it (double-click to reset)';
   bar.prepend(grip);
-  const hints = DOCKS.map((d) => { const h = document.createElement('div'); h.className = 'dockhint ' + d; h.dataset.dock = d; document.body.append(h); return h; });
-  const showHints = (active: Dock | null | false) => hints.forEach((h) => { h.classList.toggle('show', active !== false); h.classList.toggle('hot', h.dataset.dock === active); });
   grip.ondblclick = () => resetLayout();
   grip.onpointerdown = (e) => {
     if (e.button !== 0) return;
@@ -150,7 +174,7 @@ export function openCustomize() {
 
 export function initLayout() {
   load();
-  initGrip();
+  initGrip(); initOptionsGrip();
   $('toolbar').addEventListener('contextmenu', toolbarMenu);
   $('options').addEventListener('contextmenu', optionsMenu);
   addEventListener('resize', () => { if (layout.toolbar.dock === 'float') apply(); });

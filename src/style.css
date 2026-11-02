@@ -138,3 +138,4 @@ input[type=range] { accent-color: var(--accent); }
 .dockhint.top { left: 0; right: 0; top: 0; height: 70px; } .dockhint.bottom { left: 0; right: 0; bottom: 0; height: 70px; }
 .cust-list { display: grid; max-height: 55vh; overflow-y: auto; background: var(--bg0); border: 1px solid var(--line); border-radius: 4px; }
 .cust-row { display: flex; align-items: center; gap: 8px; padding: 2px 8px; border-bottom: 1px solid #1a1a1a; } .cust-row .tool { cursor: default; } .cust-row button { padding: 0 6px; }
+#options .grip { flex: none; width: 10px; height: 24px; margin-right: -4px; cursor: grab; border-radius: 3px; background: radial-gradient(circle, var(--dim) 1px, transparent 1.5px) 0 0 / 6px 6px; opacity: .6; touch-action: none; } #options .grip:hover, #options .grip.dragging { opacity: 1; background-color: var(--bg3); }
