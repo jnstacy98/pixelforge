@@ -2334,8 +2334,8 @@ assert.equal(await page.evaluate(() => document.querySelectorAll('#options .grip
 const og = await page.evaluate(() => { const r = document.querySelector('#options .grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
 await page.mouse.move(og.x, og.y); await page.mouse.down(); await page.mouse.move(og.x + 40, 700, { steps: 6 }); await page.mouse.up(); await wait();
 assert.equal(await page.evaluate(() => document.getElementById('options').parentElement.id), 'dock-bottom'); ok('dragging the options grip to the lower half docks the options bar at the bottom');
-const og2 = await page.evaluate(() => { const r = document.querySelector('#options .grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
-await page.mouse.move(og2.x, og2.y); await page.mouse.down(); await page.mouse.move(og2.x + 40, 100, { steps: 6 }); await page.mouse.up(); await wait();
+const ogUp = await page.evaluate(() => { const r = document.querySelector('#options .grip').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+await page.mouse.move(ogUp.x, ogUp.y); await page.mouse.down(); await page.mouse.move(ogUp.x + 40, 100, { steps: 6 }); await page.mouse.up(); await wait();
 assert.equal(await page.evaluate(() => document.getElementById('options').parentElement.id), 'dock-top'); ok('…and dragging it back to the upper half returns it to the top');
 await page.evaluate(() => window.__app.setTool('brush'));
 
