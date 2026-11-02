@@ -79,12 +79,12 @@ export function renderOptions() {
     el.append(sl, hintEl('Paint over a blemish — it is healed from a matching nearby area when you release'));
   } else if (t === 'patch') {
     const ml = document.createElement('label'); const ms = document.createElement('select');
-    ms.innerHTML = '<option value="source">Source</option><option value="dest">Destination</option>'; ms.value = app.patch.mode; ms.onchange = () => (app.patch.mode = ms.value as 'source' | 'dest'); ml.append('Patch', ms);
+    ms.innerHTML = '<option value="source">Source</option><option value="dest">Destination</option><option value="content">Content-Aware</option>'; ms.value = app.patch.mode; ms.onchange = () => (app.patch.mode = ms.value as 'source' | 'dest' | 'content'); ml.append('Patch', ms);
     const bl = document.createElement('label'); const bc = document.createElement('input'); bc.type = 'checkbox'; bc.checked = app.patch.blend; bc.onchange = () => (app.patch.blend = bc.checked); bl.append(bc, 'Match tone & texture');
     const sl = document.createElement('label'); const ss = document.createElement('select');
     ss.innerHTML = '<option value="layer">Current layer</option><option value="below">Current &amp; below</option><option value="all">All layers</option>';
     ss.value = app.clone.sample; ss.onchange = () => (app.clone.sample = ss.value as typeof app.clone.sample); sl.append('Sample', ss);
-    el.append(ml, bl, sl, hintEl('Draw around an area, then drag the selection: Source = repair it from where you drop it · Destination = copy it there'));
+    el.append(ml, bl, sl, hintEl('Draw around an area, then drag the selection: Source = repair it from where you drop it · Destination = copy it there · Content-Aware = fill it with new content built mostly from where you drop it'));
   } else if (t === 'cmove') {
     const ml = document.createElement('label'); const ms = document.createElement('select');
     ms.innerHTML = '<option value="move">Move</option><option value="extend">Extend (copy)</option>'; ms.value = app.cmove.mode; ms.onchange = () => (app.cmove.mode = ms.value as 'move' | 'extend'); ml.append('Mode', ms);

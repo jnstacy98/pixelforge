@@ -16,6 +16,43 @@ const insideSelection = (doc: Doc, p: Pt) => {
   return doc.selMask ? ctxOf(doc.selMask).getImageData(x, y, 1, 1).data[3] > 127 : true;
 };
 
+/** Content-aware fill of `mask`'s area on a snapshot. `hint` (e.g. where the outline was dropped) is kept inside the sampled crop. */
+async function fillHole(snap: HTMLCanvasElement, mask: HTMLCanvasElement, sel: Rect, hint: Rect | null, title: string):
+  Promise<{ cut: HTMLCanvasElement; fill: HTMLCanvasElement; roi: Rect } | null> {
+  const W = snap.width, H = snap.height, grow = 3;
+  let margin = Math.min(240, Math.max(48, Math.round(1.5 * Math.max(sel.w, sel.h))));
+  const roiFor = (m: number): Rect => {
+    let x0 = sel.x - grow - m, y0 = sel.y - grow - m, x1 = sel.x + sel.w + grow + m, y1 = sel.y + sel.h + grow + m;
+    if (hint) { x0 = Math.min(x0, hint.x - 16); y0 = Math.min(y0, hint.y - 16); x1 = Math.max(x1, hint.x + hint.w + 16); y1 = Math.max(y1, hint.y + hint.h + 16); }
+    return clampRect({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, W, H)!;
+  };
+  let roi = roiFor(margin);
+  while (roi.w * roi.h > 500_000 && margin > 24) { margin -= 16; roi = roiFor(margin); }
+  const { x: rx, y: ry, w: rw, h: rh } = roi;
+  const rgba = ctxOf(snap).getImageData(rx, ry, rw, rh).data;
+  const m = ctxOf(mask).getImageData(rx, ry, rw, rh).data, hole = new Uint8Array(rw * rh);
+  for (let q = 0; q < hole.length; q++) hole[q] = m[q * 4 + 3] > 127 ? 1 : 0;
+  const big = expandMask(hole, rw, rh, grow);
+  try {
+    const out = await withFillOverlay(title, (progress, cancelled) =>
+      inpaint(new Uint8ClampedArray(rgba), rw, rh, big, { quality: 'fast', onProgress: progress, shouldCancel: cancelled }));
+    const f = new ImageData(rw, rh), c = new ImageData(rw, rh);
+    for (let q = 0; q < big.length; q++) if (big[q]) { for (let k = 0; k < 4; k++) f.data[q * 4 + k] = out[q * 4 + k]; c.data[q * 4 + 3] = 255; }
+    const fill = makeCanvas(rw, rh), cut = makeCanvas(rw, rh);
+    ctxOf(fill).putImageData(f, 0, 0); ctxOf(cut).putImageData(c, 0, 0);
+    return { cut, fill, roi };
+  } catch (e) {
+    app.toast((e as Error).message === 'cancelled' ? 'Cancelled' : `Content-aware fill failed: ${(e as Error).message}`);
+    return null;
+  }
+}
+const applyFill = (ctx: CanvasRenderingContext2D, r: { cut: HTMLCanvasElement; fill: HTMLCanvasElement; roi: Rect }) => {
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(r.cut, r.roi.x, r.roi.y);
+  ctx.globalCompositeOperation = 'source-over'; ctx.drawImage(r.fill, r.roi.x, r.roi.y);
+  ctx.restore();
+};
+
 /**
  * Patch tool. Draw a freehand selection around the area, then drag it:
  *  • Source — the selected area is repaired with the texture of the area you drag the outline onto;
@@ -87,6 +124,7 @@ export class PatchTool implements Tool {
   }
 
   protected commit(dx: number, dy: number) {
+    if (app.patch.mode === 'content') { void this.commitContent(dx, dy); return; }
     const doc = app.doc, layer = doc.active, dest = this.destMode(), W = layer.target.width, H = layer.target.height;
     const sh = dest ? { x: dx, y: dy } : { x: 0, y: 0 };          // where the repaired/pasted area is
     const off = dest ? { x: -dx, y: -dy } : { x: dx, y: dy };     // a pixel p there reads the sample at p + off
@@ -119,6 +157,16 @@ export class PatchTool implements Tool {
     }
   }
 
+  /** Content-Aware mode: synthesise new content for the selection, sampling mainly from where the outline was dropped. */
+  private async commitContent(dx: number, dy: number) {
+    const doc = app.doc, layer = doc.active, sel = doc.selection!;
+    const r = await fillHole(this.snap, this.mask, sel, { x: sel.x + dx, y: sel.y + dy, w: sel.w, h: sel.h }, 'Content-Aware Patch…');
+    if (!r) { doc.emit('structure'); return; }
+    const before = cloneCanvas(layer.target);
+    applyFill(layer.tctx, r);
+    pushPixelEdit(doc, layer, before, r.roi, 'Patch');
+  }
+
   overlay(ctx: CanvasRenderingContext2D, ts: (x: number, y: number) => [number, number]) {
     if (this.state === 'draw') this.lasso.overlay?.(ctx, ts);
   }
@@ -143,27 +191,12 @@ export class ContentMoveTool extends PatchTool {
     let bg: HTMLCanvasElement = this.snap, cut: HTMLCanvasElement | null = null, fill: HTMLCanvasElement | null = null, roi: Rect | null = null;
     try {
       if (move) {
-        const grow = 3;
-        let margin = Math.min(240, Math.max(48, Math.round(1.5 * Math.max(sel.w, sel.h))));
-        const roiFor = (m: number) => clampRect({ x: sel.x - grow - m, y: sel.y - grow - m, w: sel.w + 2 * (grow + m), h: sel.h + 2 * (grow + m) }, W, H)!;
-        roi = roiFor(margin);
-        while (roi.w * roi.h > 500_000 && margin > 24) { margin -= 16; roi = roiFor(margin); }
-        const { x: rx, y: ry, w: rw, h: rh } = roi;
-        const rgba = snapCtx.getImageData(rx, ry, rw, rh).data;
-        const m = ctxOf(this.mask).getImageData(rx, ry, rw, rh).data, hole = new Uint8Array(rw * rh);
-        for (let q = 0; q < hole.length; q++) hole[q] = m[q * 4 + 3] > 127 ? 1 : 0;
-        const big = expandMask(hole, rw, rh, grow);
-        const out = await withFillOverlay('Content-Aware Move…', (progress, cancelled) =>
-          inpaint(new Uint8ClampedArray(rgba), rw, rh, big, { quality: 'fast', onProgress: progress, shouldCancel: cancelled }));
-        const f = new ImageData(rw, rh), c = new ImageData(rw, rh);
-        for (let q = 0; q < big.length; q++) if (big[q]) { for (let k = 0; k < 4; k++) f.data[q * 4 + k] = out[q * 4 + k]; c.data[q * 4 + 3] = 255; }
-        fill = makeCanvas(rw, rh); cut = makeCanvas(rw, rh);
-        ctxOf(fill).putImageData(f, 0, 0); ctxOf(cut).putImageData(c, 0, 0);
+        const r = await fillHole(this.snap, this.mask, sel, { x: sel.x + dx, y: sel.y + dy, w: sel.w, h: sel.h }, 'Content-Aware Move…');
+        if (!r) { doc.emit('structure'); return; }
+        ({ cut, fill, roi } = r);
         bg = cloneCanvas(this.snap);
-        const bx = ctxOf(bg);
-        bx.globalCompositeOperation = 'destination-out'; bx.drawImage(cut, rx, ry);
-        bx.globalCompositeOperation = 'source-over'; bx.drawImage(fill, rx, ry);
-        touched.push(roi);
+        applyFill(ctxOf(bg), r);
+        touched.push(r.roi);
       }
     } catch (e) {
       app.toast((e as Error).message === 'cancelled' ? 'Content-Aware Move cancelled' : `Content-Aware Move failed: ${(e as Error).message}`);
@@ -189,12 +222,7 @@ export class ContentMoveTool extends PatchTool {
     }
     if (!touched.length) { doc.emit('structure'); return; }
     const ctx = layer.tctx;
-    if (move && cut && fill && roi) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(cut, roi.x, roi.y);
-      ctx.globalCompositeOperation = 'source-over'; ctx.drawImage(fill, roi.x, roi.y);
-      ctx.restore();
-    }
+    if (move && cut && fill && roi) applyFill(ctx, { cut, fill, roi });
     if (tmp && g) ctx.drawImage(tmp, g.x, g.y);
     const x0 = Math.min(...touched.map((r) => r.x)), y0 = Math.min(...touched.map((r) => r.y));
     const x1 = Math.max(...touched.map((r) => r.x + r.w)), y1 = Math.max(...touched.map((r) => r.y + r.h));

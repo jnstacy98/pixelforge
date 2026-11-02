@@ -1522,6 +1522,17 @@ await page.keyboard.press('Control+z'); await wait();
 assert.ok(Math.abs(await redness(300, 150)) < 12); ok('undo removes the extended copy');
 assert.equal(await page.evaluate(() => !!document.querySelector('[data-tool="cmove"], #tool-cmove')), true); ok('Content-Aware Move is in the toolbox');
 
+// 6p2. Patch tool, Content-Aware mode
+await patchScene('content');
+await lassoAround(100, 150, 26);
+await dragSel([100, 150], [60, 150]);
+const cpatch = await discStats(100, 150, 14);
+assert.ok(cpatch.min > 70, `blemish still there (min ${cpatch.min})`); ok('Patch (Content-Aware): the blemish is replaced');
+assert.ok(Math.abs(cpatch.mean - 120) < 20 && cpatch.sd > 1.5, `mean ${cpatch.mean} sd ${cpatch.sd}`); ok('…with content matching the surroundings (not the brighter far side), not a flat smear');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Patch');
+await page.keyboard.press('Control+z'); await wait();
+assert.ok((await discStats(100, 150, 8)).mean < 60); ok('undo restores the blemish');
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');
