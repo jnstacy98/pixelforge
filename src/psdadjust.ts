@@ -35,6 +35,12 @@ export function toPsdAdjustment(a: AdjustmentData): AdjustmentLayer {
       return a.mono ? { type: 'channel mixer', monochrome: true, gray: ch(a.rows[0]) }
         : { type: 'channel mixer', monochrome: false, red: ch(a.rows[0]), green: ch(a.rows[1]), blue: ch(a.rows[2]) };
     }
+    case 'selective': {
+      const keys = ['reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas', 'whites', 'neutrals', 'blacks'] as const;
+      const o: any = { type: 'selective color', mode: a.relative ? 'relative' : 'absolute' };
+      keys.forEach((k, i) => { o[k] = { c: a.r[i][0], m: a.r[i][1], y: a.r[i][2], k: a.r[i][3] }; });
+      return o;
+    }
     case 'gradmap': return { type: 'gradient map', gradientType: 'solid', reverse: a.reverse, smoothness: 1,
       colorStops: a.stops.map((s) => ({ location: s.x, midpoint: 0.5, color: { r: s.c[0], g: s.c[1], b: s.c[2] } })),
       opacityStops: a.stops.map((s) => ({ location: s.x, midpoint: 0.5, opacity: s.a })) };
@@ -91,6 +97,10 @@ export function fromPsdAdjustment(p: AdjustmentLayer): AdjustmentData | null {
       const r = (c?: { red: number; green: number; blue: number; constant: number }) => (c ? [c.red, c.green, c.blue, c.constant] : null);
       if (p.monochrome) return { type: 'mixer', mono: true, rows: [r(p.gray) ?? [40, 40, 20, 0], [0, 100, 0, 0], [0, 0, 100, 0]] };
       return { type: 'mixer', mono: false, rows: [r(p.red) ?? [100, 0, 0, 0], r(p.green) ?? [0, 100, 0, 0], r(p.blue) ?? [0, 0, 100, 0]] };
+    }
+    case 'selective color': {
+      const keys = ['reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas', 'whites', 'neutrals', 'blacks'] as const;
+      return { type: 'selective', relative: p.mode !== 'absolute', r: keys.map((k) => { const q = (p as any)[k]; return q ? [q.c, q.m, q.y, q.k] : [0, 0, 0, 0]; }) };
     }
     case 'gradient map': {
       if (p.gradientType !== 'solid' || !p.colorStops?.length) return null;     // noise gradients are not supported

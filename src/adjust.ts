@@ -112,7 +112,9 @@ export type AdjustmentData =
   | { type: 'photo'; color: RGB; density: number; lum: boolean } // density 0..100
   | { type: 'balance'; shadows: Tri; mids: Tri; highs: Tri; lum: boolean }   // each -100..100 (cyan-red, magenta-green, yellow-blue)
   | { type: 'mixer'; mono: boolean; rows: number[][] }           // rows: out R,G,B (or gray) -> [r,g,b,const] in %
-  | { type: 'gradmap'; stops: GradStop[]; reverse: boolean };
+  | { type: 'gradmap'; stops: GradStop[]; reverse: boolean }
+  | { type: 'selective'; relative: boolean; r: number[][] };     // 9 ranges (SELECTIVE_RANGES) × [c, m, y, k] in -100..100
+export const SELECTIVE_RANGES = ['Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas', 'Whites', 'Neutrals', 'Blacks'];
 export type RGB = [number, number, number];
 export type Tri = [number, number, number];
 export interface GradStop { x: number; c: RGB; a: number }
@@ -121,7 +123,7 @@ export type AdjustmentType = AdjustmentData['type'];
 export const ADJUSTMENT_LABELS: Record<AdjustmentType, string> = {
   levels: 'Levels', curves: 'Curves', invert: 'Invert', brightness: 'Brightness/Contrast', hue: 'Hue/Saturation',
   posterize: 'Posterize', threshold: 'Threshold', exposure: 'Exposure', vibrance: 'Vibrance', bw: 'Black & White',
-  photo: 'Photo Filter', balance: 'Color Balance', mixer: 'Channel Mixer', gradmap: 'Gradient Map',
+  photo: 'Photo Filter', selective: 'Selective Color', balance: 'Color Balance', mixer: 'Channel Mixer', gradmap: 'Gradient Map',
 };
 export const CHANNELS_ALL: Channel[] = ['rgb', 'r', 'g', 'b'];
 
@@ -140,6 +142,7 @@ export function defaultAdjustment(type: AdjustmentType): AdjustmentData {
     case 'photo': return { type, color: [236, 138, 0], density: 25, lum: true };
     case 'balance': return { type, shadows: [0, 0, 0], mids: [0, 0, 0], highs: [0, 0, 0], lum: true };
     case 'mixer': return { type, mono: false, rows: [[100, 0, 0, 0], [0, 100, 0, 0], [0, 0, 100, 0]] };
+    case 'selective': return { type, relative: true, r: SELECTIVE_RANGES.map(() => [0, 0, 0, 0]) };
     case 'gradmap': return { type, stops: [{ x: 0, c: [0, 0, 0], a: 1 }, { x: 1, c: [255, 255, 255], a: 1 }], reverse: false };
   }
 }
@@ -309,6 +312,32 @@ export function applyPixelAdjustment(a: AdjustmentData, d: Uint8ClampedArray): b
         const f = (row: number[]) => clamp255((row[0] * r + row[1] * g + row[2] * b) / 100 + row[3] * 2.55);
         if (a.mono) { const v = f(R[0]); d[i] = d[i + 1] = d[i + 2] = v; }
         else { d[i] = f(R[0]); d[i + 1] = f(R[1]); d[i + 2] = f(R[2]); }
+      }
+      return true;
+    }
+    case 'selective': {
+      if (a.r.every((q) => q.every((v) => v === 0))) return true;
+      for (let i = 0; i < n; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        const w = new Array<number>(9).fill(0), chroma = (mx - mn) / 255;
+        if (mx > mn) {
+          const [h] = rgbToHsv(r, g, b);
+          for (let k = 0; k < 6; k++) { let dh = Math.abs(h - k * 60); if (dh > 180) dh = 360 - dh; w[k] = Math.max(0, 1 - dh / 60) * chroma; }
+        }
+        w[6] = Math.max(0, (mn - 128) / 127);                                   // whites
+        w[8] = Math.max(0, (128 - mx) / 128);                                   // blacks
+        w[7] = Math.max(0, 1 - (Math.abs(mx - 128) + Math.abs(mn - 128)) / 255) * (1 - chroma); // neutrals
+        const k0 = 1 - mx / 255, ik = 1 - k0;                                   // RGB -> CMYK (max-channel black)
+        const c = ik > 0 ? 1 - r / 255 / ik : 0, m = ik > 0 ? 1 - g / 255 / ik : 0, y = ik > 0 ? 1 - b / 255 / ik : 0;
+        let dc = 0, dm = 0, dy = 0, dk = 0;
+        for (let j = 0; j < 9; j++) {
+          if (!w[j]) continue;
+          const q = a.r[j], f = w[j] / 100;
+          if (a.relative) { dc += q[0] * f * c; dm += q[1] * f * m; dy += q[2] * f * y; dk += q[3] * f * k0; }
+          else { dc += q[0] * f; dm += q[1] * f; dy += q[2] * f; dk += q[3] * f; }
+        }
+        const cc = Math.min(1, Math.max(0, c + dc)), mm = Math.min(1, Math.max(0, m + dm)), yy = Math.min(1, Math.max(0, y + dy)), kk = Math.min(1, Math.max(0, k0 + dk));
+        d[i] = 255 * (1 - cc) * (1 - kk); d[i + 1] = 255 * (1 - mm) * (1 - kk); d[i + 2] = 255 * (1 - yy) * (1 - kk);
       }
       return true;
     }

@@ -117,7 +117,6 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.deepEqual(P.fromPsdAdjustment(P.toPsdAdjustment({ type: 'hue', h: -40, s: 25 })), { type: 'hue', h: -40, s: 25 });
   assert.deepEqual(P.fromPsdAdjustment({ type: 'invert' }), { type: 'invert' });
   assert.equal(P.fromPsdAdjustment({ type: 'color lookup' }), null);
-  assert.equal(P.fromPsdAdjustment({ type: 'selective color' }), null);
 });
 
 // ---- healing maths
@@ -538,6 +537,18 @@ t('new adjustment types survive a PSD conversion round trip', () => {
     const back = P.fromPsdAdjustment(P.toPsdAdjustment(c));
     assert.deepEqual(JSON.parse(JSON.stringify(back)), JSON.parse(JSON.stringify(c)), c.type);
   }
+});
+t('selective color: only the targeted range changes; relative vs absolute; PSD round trip', () => {
+  const mk = (relative, i, q) => { const a = def('selective', { relative }); a.r[i] = q; return a; };
+  assert.deepEqual(px(def('selective'), 200, 80, 40), [200, 80, 40, 255]);
+  const red = mk(true, 0, [0, 0, 0, 0]); red.r[0] = [0, 0, -100, 0];                 // remove yellow from reds
+  const out = px(red, 200, 60, 60); assert.ok(out[2] > 100 && out[0] === 200, `got ${out}`);
+  assert.deepEqual(px(red, 40, 60, 200), [40, 60, 200, 255]);                          // a blue is untouched
+  assert.deepEqual(px(mk(true, 0, [0, 0, 0, 50]), 250, 20, 20).slice(0, 3).map((v) => v > 200), [true, false, false]);
+  const abs = px(mk(false, 7, [0, 0, 0, 40]), 128, 128, 128); assert.ok(abs[0] < 110, `neutral absolute black ${abs}`);
+  const rel = px(mk(true, 7, [0, 0, 0, 40]), 128, 128, 128); assert.ok(rel[0] < 128 && rel[0] > abs[0] - 1);
+  const a = mk(false, 3, [10, -20, 30, 5]);
+  assert.deepEqual(P.fromPsdAdjustment(P.toPsdAdjustment(a)), a);
 });
 t('PSD Lab colours (Photo Filter) import as sRGB', () => {
   const a = P.fromPsdAdjustment({ type: 'photo filter', color: { l: 0.45, a: 0.1417, b: -0.9609 }, density: 0.25, preserveLuminosity: true });

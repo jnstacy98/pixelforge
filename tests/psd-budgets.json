@@ -1,7 +1,7 @@
 {
  "read-write__adjustments.psd": {
-  "maxMAE": 1.5,
-  "note": "Color Lookup (3D LUT) and Selective Color are still hidden placeholders"
+  "maxMAE": 0.5,
+  "note": "Color Lookup (3D LUT) is still a hidden placeholder"
  },
  "read-write__effects.psd": {
   "maxMAE": 5.74

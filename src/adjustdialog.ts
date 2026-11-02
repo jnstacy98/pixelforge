@@ -381,8 +381,9 @@ type Field =
   | { kind: 'check'; label: string; path: Path }
   | { kind: 'color'; label: string; path: Path }
   | { kind: 'optcolor'; label: string; path: Path; def: A.RGB }     // nullable colour with an enable checkbox
-  | { kind: 'stops' };
-const FIELDS = (a: A.AdjustmentData): Field[] => {
+  | { kind: 'stops' }
+  | { kind: 'rangesel' };
+const FIELDS = (a: A.AdjustmentData, sel = 0): Field[] => {
   const r = (label: string, path: Path, min: number, max: number, step = 1): Field => ({ kind: 'range', label, path, min, max, step });
   switch (a.type) {
     case 'posterize': return [r('Levels', ['levels'], 2, 255)];
@@ -399,6 +400,7 @@ const FIELDS = (a: A.AdjustmentData): Field[] => {
       { kind: 'check', label: 'Monochrome', path: ['mono'] },
       ...(a.mono ? [['Gray', 0]] : [['Red', 0], ['Green', 1], ['Blue', 2]]).flatMap(([n, i]) => [
         r(`${n} ← Red`, ['rows', i as number, 0], -200, 200), r(`${n} ← Green`, ['rows', i as number, 1], -200, 200), r(`${n} ← Blue`, ['rows', i as number, 2], -200, 200), r(`${n} const`, ['rows', i as number, 3], -100, 100)])];
+    case 'selective': return [{ kind: 'rangesel' }, ...['Cyan', 'Magenta', 'Yellow', 'Black'].map((n, i) => r(n, ['r', sel, i], -100, 100)), { kind: 'check', label: 'Relative (off = Absolute)', path: ['relative'] }];
     case 'gradmap': return [{ kind: 'check', label: 'Reverse', path: ['reverse'] }, { kind: 'stops' }];
     default: return [];
   }
@@ -413,10 +415,17 @@ function paramsDialog(title: string, sess: Sess, init: A.AdjustmentData) {
     let cur = A.cloneAdjustment(init);
     const host = el('div', { class: 'adjust-body' });
     const ctl: Record<string, (v: any) => void> = {};
+    let sel = 0;
     const build = () => {
       host.replaceChildren();
-      for (const f of FIELDS(cur)) {
-        if (f.kind === 'range') {
+      for (const f of FIELDS(cur, sel)) {
+        if (f.kind === 'rangesel') {
+          const o = el('select');
+          A.SELECTIVE_RANGES.forEach((n, i) => o.append(el('option', { value: String(i), textContent: n, selected: i === sel })));
+          o.onchange = () => { sel = Number(o.value); build(); };
+          ctl.range = (i) => { sel = i; build(); };
+          host.append(el('div', { class: 'row' }, 'Colors ', o));
+        } else if (f.kind === 'range') {
           const key = f.path.join('.'), v0 = getAt(cur, f.path) as number;
           const rg = el('input', { type: 'range', min: String(f.min), max: String(f.max), step: String(f.step ?? 1), value: String(v0) });
           const n = numField(f.min, f.max, f.step ?? 1, (x) => { setAt(cur, f.path, x); rg.value = String(x); preview(); });

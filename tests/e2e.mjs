@@ -477,6 +477,14 @@ await pset('reverse', true);
 const gm2 = await view(); assert.ok(gm2[2] > gm2[0], `got ${gm2}`); ok('Gradient Map reverse flips the ramp');
 await page.keyboard.press('Enter'); await wait();
 
+await newGray([200, 60, 60]);
+await addAdj('Selective Color'); await page.waitForSelector('.adjust-body select');
+await page.evaluate(() => document.querySelector('.adjust-body').__params.set('r.0.2', -100));
+const sc0 = await view(); assert.ok(sc0[2] > 100 && sc0[0] === 200, `got ${sc0}`); ok('Selective Color: removing yellow from Reds lifts the blue of a red pixel');
+await page.evaluate(() => document.querySelector('.adjust-body').__params.set('range', 4));
+assert.equal(await page.evaluate(() => document.querySelector('.adjust-body select').value), '4'); ok('Selective Color dialog switches colour range');
+await page.keyboard.press('Enter'); await wait();
+
 // PSD round trip keeps the new types
 await newGray([90, 120, 200]);
 await page.evaluate(() => {
