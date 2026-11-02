@@ -83,7 +83,7 @@ const hintEl = (text: string) => { const s = document.createElement('span'); s.s
 let xformSync: (() => void) | null = null;
 app.on('xform', () => xformSync?.());
 export function renderOptions() {
-  const el = $('options'); el.innerHTML = '';
+  const el = $('options'); [...el.children].forEach((c) => { if (!c.classList.contains('grip')) c.remove(); }); // keep the drag grip
   const t = app.toolId, b = app.brush;
   const pct = (v: number) => Math.round(v * 100) + '%';
   if (t === 'brush' || t === 'eraser') {
