@@ -2047,6 +2047,55 @@ await page.evaluate(() => window.__app.setTool('text')); await wait();
 assert.equal(await page.evaluate(() => document.querySelector('textarea.texteditor').classList.contains('pathtext')), false); ok('clicking away from any outline starts ordinary text');
 await page.keyboard.press('Escape'); await wait();
 
+// 6ae. smart filters
+const sfAdd = (f) => page.evaluate(async (f) => { const d = window.__app.doc; await window.__smartApi.addSmartFilter(d, d.active, f); }, f);
+const sfUpd = (i, patch) => page.evaluate(async ([i, patch]) => { const d = window.__app.doc; await window.__smartApi.updateSmartFilter(d, d.active, i, patch); }, [i, patch]);
+const sfRem = (i) => page.evaluate(async (i) => { const d = window.__app.doc; await window.__smartApi.removeSmartFilter(d, d.active, i); }, i);
+const sfList = () => page.evaluate(() => (window.__app.doc.active.smart?.filters ?? []).map((f) => ({ kind: f.kind, on: f.on, p: f.p })));
+await ftScene();
+await page.evaluate(() => { window.__smartApi.convertToSmart(window.__app.doc, window.__app.doc.active); });
+await page.waitForFunction(() => window.__app.doc.layers[0].smart); await wait();
+assert.equal((await a0px(98, 130))[3], 0);
+await sfAdd({ kind: 'gaussian', on: true, p: { radius: 6 } }); await wait();
+assert.ok((await a0px(98, 130))[3] > 20 && (await a0px(98, 130))[3] < 200 && (await a0px(140, 130))[3] === 255 && (await a0px(160, 100))[3] < 255); ok('a Gaussian Blur smart filter softens the smart object’s edges (and the interior stays solid)');
+assert.equal(await page.evaluate(() => window.__app.doc.history.undoLabel), 'Add Gaussian Blur');
+await sfUpd(0, { p: { radius: 0.1 } }); await wait();
+assert.equal((await a0px(98, 130))[3], 0); assert.equal((await a0px(104, 130))[3], 255); ok('lowering the radius re-renders from the original source: the edge is crisp again (nothing was baked in)');
+await sfUpd(0, { p: { radius: 12 } }); await sfUpd(0, { on: false }); await wait();
+assert.equal((await a0px(98, 130))[3], 0); ok('switching a filter off shows the unfiltered object');
+await sfUpd(0, { on: true }); await wait();
+assert.ok((await a0px(98, 130))[3] > 20); ok('…and on again');
+await sfAdd({ kind: 'invert', on: true, p: {} }); await wait();
+assert.deepEqual((await a0px(140, 130)).slice(0, 3), [47, 223, 223]); assert.equal((await sfList()).length, 2); ok('filters stack in order (blur then Invert flips the red to cyan)');
+await sfRem(0); await wait();
+assert.deepEqual((await sfList()).map((f) => f.kind), ['invert']); assert.equal((await a0px(98, 130))[3], 0); ok('deleting a filter removes its effect');
+await page.keyboard.press('Control+z'); await wait();
+assert.deepEqual((await sfList()).map((f) => f.kind), ['gaussian', 'invert']); assert.ok((await a0px(98, 130))[3] > 20); ok('…and undoes');
+// survives transforms and PSD round trips
+await page.keyboard.press('Control+t'); await page.waitForFunction(() => window.__xform.active);
+await page.evaluate(() => window.__xform.set({ sx: 2, sy: 2 })); await page.keyboard.press('Enter'); await wait();
+assert.equal((await sfList()).length, 2); assert.deepEqual((await a0px(140, 130)).slice(0, 3), [47, 223, 223]); assert.ok((await a0px(48, 130))[3] > 0 || (await a0px(46, 130))[3] > 0); ok('Free Transform re-renders the smart object with its filters (and keeps all of them)');
+const rtF = await page.evaluate(() => window.__adjRoundtrip());
+const slayer = rtF.layers.find((l) => l.smart); assert.ok(slayer && slayer.smart.filters === 2 && slayer.smart.raw === 0); ok('PSD round-trip keeps the smart filters as real Photoshop smart-filter data');
+// the panel
+await page.locator('#menubar .menu .title:text-is("Layer")').click(); await page.locator('#menubar .menu.open .mi:has-text("Smart Filters")').click();
+await page.waitForSelector('.sf-panel'); assert.equal(await page.locator('.sf-panel .row').count(), 2); ok('Layer ▸ Smart Filters… lists the stack');
+await page.selectOption('.sf-panel select', 'invert'); await page.waitForFunction(() => document.querySelectorAll('.sf-panel .row').length === 3); await wait();
+assert.equal((await sfList()).length, 3); ok('the panel adds a filter (Invert needs no parameters)');
+await page.locator('.sf-panel .row').nth(2).locator('button[title=Delete]').click(); await page.waitForFunction(() => document.querySelectorAll('.sf-panel .row').length === 2); await wait();
+assert.equal((await sfList()).length, 2); ok('…and deletes one again');
+await page.locator('.sf-panel .row').nth(1).locator('input[type=checkbox]').uncheck(); await page.waitForTimeout(400);
+assert.equal((await sfList())[1].on, false); ok('the checkbox switches a filter off');
+await page.click('.sf-panel button.primary'); await wait();
+// rasterize keeps the pixels but drops the filters
+await page.evaluate(() => { window.__smartApi.rasterizeSmart(window.__app.doc, window.__app.doc.active); }); await wait();
+assert.equal(await page.evaluate(() => !!window.__app.doc.layers[0].smart), false); assert.ok((await a0px(48, 130))[3] > 0 || (await a0px(46, 130))[3] > 0); ok('Rasterize Layer keeps the filtered pixels and drops the filter list');
+// an ordinary layer is converted automatically when you open Smart Filters
+await ftScene();
+await page.locator('#menubar .menu .title:text-is("Layer")').click(); await page.locator('#menubar .menu.open .mi:has-text("Smart Filters")').click();
+await page.waitForSelector('.sf-panel'); await page.waitForFunction(() => window.__app.doc.layers[0].smart); ok('opening Smart Filters on an ordinary layer converts it to a smart object first');
+await page.keyboard.press('Escape'); await wait();
+
 // 7. open PNG via file drop path
 const png = await page.evaluate(async () => (await window.__openPng()));
 assert.equal(png.w, 64); ok('PNG import creates document');

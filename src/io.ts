@@ -1,4 +1,5 @@
 import { fingerprint } from './smartmath';
+import { fromPsdFilters, toPsdFilters } from './smartfilters';
 import { decodeTiff, encodeTiff } from './tiff';
 import { getPattern, hasPattern, registerPattern } from './patterns';
 import { fromPsdRanges, isBlendIfActive, toPsdRanges } from './blendif';
@@ -120,7 +121,12 @@ function importPsd(data: ArrayBuffer, name: string): Doc {
       const l = new Layer(c.name || 'Layer', canvas);
       l.parent = parent; l.visible = !c.hidden; l.opacity = c.opacity ?? 1; l.clipped = !!c.clipping; l.fillOpacity = c.fillOpacity ?? 1;
       l.blendIf = fromPsdRanges(c.blendingRanges);
-      if (c.placedLayer && doc.linked.some((f) => f.id === c.placedLayer!.id)) l.smart = { placed: JSON.parse(JSON.stringify(c.placedLayer)), print: layerPrint(l) };
+      if (c.placedLayer && doc.linked.some((f) => f.id === c.placedLayer!.id)) {
+        const placed = JSON.parse(JSON.stringify(c.placedLayer)), pf = placed.filter?.list;
+        delete placed.filter;
+        l.smart = { placed, print: layerPrint(l) };
+        if (pf?.length) { const r = fromPsdFilters(pf); if (r.filters.length) l.smart.filters = r.filters; if (r.unsupported.length) { l.smart.rawFilters = r.unsupported; doc.notes.push(`"${l.name}": ${[...new Set(r.unsupported.map((x) => x.name))].join(', ')} smart filter(s) kept as rendered pixels but can't be edited here`); } }
+      }
       if (c.effects) {
         const { fx, unsupported } = fromPsdEffects(c.effects, psd.imageResources?.globalAngle !== undefined ? { angle: psd.imageResources.globalAngle, altitude: psd.imageResources.globalAltitude ?? 30 } : undefined);
         if (Object.keys(fx).length) l.effects = fx;
@@ -167,7 +173,7 @@ export async function encode(doc: Doc, fmt: ExportFormat, quality = 0.92): Promi
           name: l.name, left: 0, top: 0, opacity: l.opacity, hidden: !l.visible, clipping: l.clipped,
           ...(!l.isGroup && !l.adjustment ? { fillOpacity: l.fillOpacity } : {}),
           ...(l.effects ? { effects: toPsdEffects(l.effects) } : {}),
-          ...(!l.isGroup && smartIntact(doc, l) ? { placedLayer: l.smart!.placed } : {}),
+          ...(!l.isGroup && smartIntact(doc, l) ? { placedLayer: placedFor(l) } : {}),
           ...(isBlendIfActive(l.blendIf) ? { blendingRanges: toPsdRanges(l.blendIf) } : {}),
           ...(l.isGroup ? { children: n.children.map(toPsd), opened: !l.collapsed } : l.adjustment ? { adjustment: toPsdAdjustment(l.adjustment) } : { canvas: l.canvas }),
           blendMode: l.blend as PsdLayer['blendMode'],
@@ -236,4 +242,10 @@ export function smartIntact(doc: Doc, l: Layer) { return !!l.smart && doc.linked
 function usedLinked(doc: Doc) {
   const ids = new Set(doc.layers.filter((l) => !l.isGroup && smartIntact(doc, l)).map((l) => l.smart!.placed.id));
   return doc.linked.filter((f) => ids.has(f.id)).map((f) => ({ id: f.id, name: f.name, type: f.type, data: f.data }));
+}
+
+/** The layer's placed-layer record with its smart filters written back in Photoshop's form. */
+function placedFor(l: Layer) {
+  const s = l.smart!, list = [...toPsdFilters(s.filters ?? []), ...(s.rawFilters ?? [])];
+  return list.length ? { ...s.placed, filter: { enabled: true, validAtPosition: true, maskEnabled: true, maskLinked: true, maskExtendWithWhite: false, list } } : s.placed;
 }

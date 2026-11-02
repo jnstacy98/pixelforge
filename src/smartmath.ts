@@ -1,12 +1,17 @@
 // Smart-object geometry and bookkeeping (pure; unit-tested). A Photoshop placed layer stores its source size and the
 // document-space positions of the source's four corners: [TLx,TLy, TRx,TRy, BRx,BRy, BLx,BLy].
-import type { PlacedLayer } from 'ag-psd';
+import type { Filter, PlacedLayer } from 'ag-psd';
+import { cloneFilters, type SmartFilter } from './smartfilters.ts';
 
 export interface LinkedFile { id: string; name: string; type?: string; data: Uint8Array }
 export interface SmartInfo {
   placed: PlacedLayer;
   /** Fingerprint of the layer's pixels when the smart object was last rendered; if the pixels change later it has been painted on and is no longer a smart object. */
   print: string;
+  /** Smart filters applied (in order) after the source is placed. */
+  filters?: SmartFilter[];
+  /** Photoshop filters PixelForge can't run: kept so that saving doesn't lose them. */
+  rawFilters?: Filter[];
 }
 export type Quad = [number, number, number, number, number, number, number, number];
 
@@ -52,4 +57,4 @@ export function newLinkId(): string {
   return `${h(8)}-${h(4)}-4${h(3)}-a${h(3)}-${h(12)}`;
 }
 
-export const cloneSmart = (s: SmartInfo | null): SmartInfo | null => (s ? { print: s.print, placed: JSON.parse(JSON.stringify(s.placed)) } : null);
+export const cloneSmart = (s: SmartInfo | null): SmartInfo | null => (s ? { print: s.print, placed: JSON.parse(JSON.stringify(s.placed)), ...(s.filters ? { filters: cloneFilters(s.filters) } : {}), ...(s.rawFilters ? { rawFilters: s.rawFilters } : {}) } : null);

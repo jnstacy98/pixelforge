@@ -14,7 +14,7 @@ import { composite } from './render';
 import { editor } from './texttool';
 import { freeTransform, startFreeTransform } from './freetransform';
 import { COMBINE_OPS, combineSelected } from './shape';
-import { convertToSmart, editContents, isSmart, rasterizeSmart, transformSmart, updateSmart } from './smart';
+import { addSmartFilter, openSmartFilters, removeSmartFilter, updateSmartFilter, convertToSmart, editContents, isSmart, rasterizeSmart, transformSmart, updateSmart } from './smart';
 import { defineBrushTip } from './definetip';
 import { loadSavedTips } from './brushtips';
 import { openBlendIf } from './blendifdialog';
@@ -170,8 +170,9 @@ const menus: { title: string; items: () => Item[] }[] = [
     ...(app.doc.active.smart ? [
       { label: 'Smart Object: Edit Contents', action: () => editContents(app.doc, app.doc.active, (d) => addDoc(d)) },
       { label: 'Smart Object: Transform…', action: () => transformSmart(app.doc, app.doc.active) },
+      { label: 'Smart Filters…', action: () => openSmartFilters(app.doc, app.doc.active) },
       { label: 'Rasterize Layer', action: () => rasterizeSmart(app.doc, app.doc.active) },
-    ] : [{ label: 'Convert to Smart Object', action: () => convertToSmart(app.doc, app.doc.active) }]),
+    ] : [{ label: 'Convert to Smart Object', action: () => convertToSmart(app.doc, app.doc.active) }, ...(app.doc.active.isGroup || app.doc.active.adjustment ? [] : [{ label: 'Smart Filters…', action: () => openSmartFilters(app.doc, app.doc.active) }])]),
     ...(app.doc.smartSource ? [{ label: 'Update Smart Object', action: () => updateSmart(app.doc, (d) => switchTo(app.docs.indexOf(d))) }] : []),
     '-',
     { label: 'New Group', action: () => app.doc.newGroup() },
@@ -356,7 +357,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
   const { encode, importFile } = await import('./io');
   const data = await encode(app.doc, 'psd');
   const d2 = await importFile({ name: 'adj.psd', data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer });
-  return { linked: d2.linked.length, layers: d2.layers.map((l) => ({ name: l.name, smart: l.smart && { id: l.smart.placed.id, transform: l.smart.placed.transform }, adj: l.adjustment, opacity: l.opacity, blend: l.blend, visible: l.visible, hasMask: !!l.mask, blendIf: l.blendIf })), notes: d2.notes };
+  return { linked: d2.linked.length, layers: d2.layers.map((l) => ({ name: l.name, smart: l.smart && { id: l.smart.placed.id, transform: l.smart.placed.transform, filters: l.smart.filters?.length ?? 0, raw: l.smart.rawFilters?.length ?? 0 }, adj: l.adjustment, opacity: l.opacity, blend: l.blend, visible: l.visible, hasMask: !!l.mask, blendIf: l.blendIf })), notes: d2.notes };
 };
 (window as any).__defaultAdj = defaultAdjustment;
 (window as any).__composite = (d: Doc, ctx: CanvasRenderingContext2D) => composite(d, ctx);
@@ -405,7 +406,7 @@ addDoc(Doc.blank(1280, 800, 'Untitled', '#ffffff'));
 };
 (window as any).__xform = freeTransform;
 (window as any).__combine = combineSelected;
-(window as any).__smartApi = { isSmart, convertToSmart, editContents, updateSmart, transformSmart, rasterizeSmart };
+(window as any).__smartApi = { addSmartFilter, updateSmartFilter, removeSmartFilter, openSmartFilters, isSmart, convertToSmart, editContents, updateSmart, transformSmart, rasterizeSmart };
 (window as any).__caf = (o: any) => contentAwareFill(o);
 (window as any).__defaultFx = defaultFx;
 

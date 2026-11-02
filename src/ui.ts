@@ -351,7 +351,7 @@ export function renderLayers() {
         pix.title = 'Smart Object — double-click to edit its contents';
         pix.ondblclick = (e) => { e.stopPropagation(); doc.select(l); void editContents(doc, l, (d) => app.openDoc(d)); };
         const wrap = document.createElement('div'); wrap.className = 'smartwrap';
-        const badge = document.createElement('span'); badge.className = 'smartbadge'; badge.textContent = '⧉'; badge.title = 'Smart Object';
+        const badge = document.createElement('span'); badge.className = 'smartbadge'; badge.textContent = '⧉'; badge.title = l.smart.filters?.length ? `Smart Object — filters: ${l.smart.filters.map((f) => f.kind).join(', ')}` : 'Smart Object';
         wrap.append(pix, badge); parts.push(wrap);
       } else parts.push(pix);
     }

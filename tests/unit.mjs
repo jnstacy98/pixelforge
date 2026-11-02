@@ -269,6 +269,35 @@ t('text on a path: flattening, arc length, glyph placement along lines / curves 
   assert.equal(TP.flattenCmds([['M', 5, 5]]).length, 0);
 });
 
+import * as SF from '../src/smartfilters.ts';
+t('smart filters: blurs, sharpen, noise, mosaic, invert, brightness; PSD conversion; cloning', () => {
+  const W = 21, H = 15, mk = (f) => { const d = new Uint8ClampedArray(W * H * 4); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const [r, g, b, a] = f(x, y), i = (y * W + x) * 4; d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = a; } return d; };
+  const at = (d, x, y) => [...d.slice((y * W + x) * 4, (y * W + x) * 4 + 4)], run = (kind, p, d) => { const c = d.slice(); SF.applySmartFilter({ kind, p: { ...SF.FILTER_INFO[kind].defaults, ...p }, on: true }, c, W, H); return c; };
+  const flat = mk(() => [120, 60, 200, 255]);
+  for (const k of ['gaussian', 'box', 'motion', 'mosaic', 'unsharp']) assert.ok(at(run(k, {}, flat), 10, 7).every((v, i) => Math.abs(v - [120, 60, 200, 255][i]) <= 1), `${k} leaves a flat colour alone`);
+  const dot = mk((x, y) => (x === 10 && y === 7 ? [255, 255, 255, 255] : [0, 0, 0, 255])), g = run('gaussian', { radius: 2 }, dot);
+  assert.ok(at(g, 10, 7)[0] < 100 && at(g, 10, 7)[0] > at(g, 12, 7)[0] && at(g, 12, 7)[0] > 0); assert.ok(Math.abs(at(g, 8, 7)[0] - at(g, 12, 7)[0]) <= 1 && Math.abs(at(g, 10, 5)[0] - at(g, 10, 9)[0]) <= 1);   // smooth and symmetric
+  const sum = (d) => { let s2 = 0; for (let i = 0; i < d.length; i += 4) s2 += d[i]; return s2; }; assert.ok(Math.abs(sum(g) - 255) < 12, `energy ${sum(g)}`);
+  const bx = run('box', { radius: 1 }, dot); assert.ok(Math.abs(at(bx, 10, 7)[0] - 255 / 9) < 2 && Math.abs(at(bx, 11, 8)[0] - 255 / 9) < 2 && at(bx, 12, 7)[0] === 0);
+  const mb = run('motion', { angle: 0, distance: 5 }, dot); assert.ok(at(mb, 12, 7)[0] > 40 && at(mb, 13, 7)[0] === 0 && at(mb, 10, 8)[0] === 0);                                         // spreads along x only
+  const mv = run('motion', { angle: 90, distance: 5 }, dot); assert.ok(at(mv, 10, 9)[0] > 40 && at(mv, 12, 7)[0] === 0);
+  const edge = mk((x) => (x < 10 ? [80, 80, 80, 255] : [160, 160, 160, 255])), us = run('unsharp', { amount: 200, radius: 2, threshold: 0 }, edge);
+  assert.ok(at(us, 9, 7)[0] < 80 && at(us, 10, 7)[0] > 160 && at(us, 2, 7)[0] === 80); const th = run('unsharp', { amount: 200, radius: 2, threshold: 200 }, edge); assert.deepEqual(at(th, 9, 7), at(edge, 9, 7));   // overshoot at the edge; threshold suppresses it
+  const clear = mk((x) => (x < 5 ? [10, 20, 30, 0] : [100, 100, 100, 255])), n1 = run('noise', { amount: 20, seed: 7 }, clear), n2 = run('noise', { amount: 20, seed: 7 }, clear), n3 = run('noise', { amount: 20, seed: 8 }, clear);
+  assert.deepEqual([...n1], [...n2]); assert.notDeepEqual([...n1], [...n3]); assert.deepEqual(at(n1, 2, 3), [10, 20, 30, 0]); assert.notDeepEqual(at(n1, 12, 3).slice(0, 3), [100, 100, 100]);
+  const nm = run('noise', { amount: 30, mono: 1, seed: 3 }, flat); for (const [x, y] of [[4, 4], [9, 2], [15, 11]]) assert.equal(at(nm, x, y)[0] - 120, at(nm, x, y)[1] - 60);                                    // monochromatic noise shifts all channels equally
+  const grad = mk((x, y) => [x * 12, y * 17, 50, 255]), ms = run('mosaic', { cell: 5 }, grad); assert.deepEqual(at(ms, 0, 0), at(ms, 4, 4)); assert.notDeepEqual(at(ms, 4, 4), at(ms, 5, 4));
+  assert.deepEqual(at(run('invert', {}, flat), 3, 3), [135, 195, 55, 255]); assert.deepEqual(at(run('invert', {}, clear), 1, 1), [10, 20, 30, 0]);
+  assert.ok(at(run('brightness', { b: 50 }, flat), 1, 1)[0] > 120 && at(run('brightness', { c: 100 }, flat), 1, 1)[0] < 120); assert.deepEqual(at(run('brightness', {}, flat), 1, 1), [120, 60, 200, 255]);
+  // PSD conversion round trip (every kind) + unknown filters are carried along
+  const all = SF.FILTER_KINDS.map((k, i) => ({ kind: k, on: i % 2 === 0, p: Object.fromEntries(Object.entries(SF.FILTER_INFO[k].defaults).map(([a, v]) => [a, v + 1 > SF.FILTER_INFO[k].params.find((s) => s.key === a).max ? v : v + 1])) }));
+  const back = SF.fromPsdFilters(SF.toPsdFilters(all)); assert.equal(back.unsupported.length, 0); back.filters.forEach((f, i) => { assert.equal(f.kind, all[i].kind); assert.equal(f.on, all[i].on); for (const [a, v] of Object.entries(all[i].p)) assert.ok(Math.abs(f.p[a] - v) <= 1, `${f.kind}.${a}: ${f.p[a]} vs ${v}`); });
+  const mixed = SF.fromPsdFilters([...SF.toPsdFilters([SF.newFilter('gaussian')]), { type: 'twirl', name: 'Twirl', filter: { angle: 10 }, opacity: 1, blendMode: 'normal', enabled: true, hasOptions: true, foregroundColor: { r: 0, g: 0, b: 0 }, backgroundColor: { r: 255, g: 255, b: 255 } }]);
+  assert.equal(mixed.filters.length, 1); assert.equal(mixed.unsupported.length, 1); assert.deepEqual(SF.fromPsdFilters(undefined), { filters: [], unsupported: [] });
+  const c = SF.cloneFilters(all); c[0].p.radius = 999; assert.notEqual(all[0].p.radius, 999);
+  const off = mk(() => [1, 2, 3, 255]); const o2 = off.slice(); SF.applySmartFilters([{ kind: 'invert', on: false, p: {} }], o2, W, H); assert.deepEqual([...o2], [...off]);                                                 // disabled filters do nothing
+});
+
 // ---- smart objects
 import * as SM from '../src/smartmath.ts';
 t('smart object geometry: affine, scale/rotate about the centre, resize source, info, fingerprint, GUID', () => {
