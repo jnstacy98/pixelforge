@@ -1,5 +1,5 @@
 import { Doc, bakedCanvas, blendOp, buildTree, makeCanvas, ctxOf, grayToAlpha, type Layer, type LayerNode, type Stroke } from './doc';
-import { applyLUTs, filterFor, lutsFor } from './adjust';
+import { applyAdjustmentData, filterFor, isPixelAdjustment } from './adjust';
 import { cloneFx, hasEffects } from './fx';
 import { renderStyled, type Styled } from './fxrender';
 import { blendInto, isCustomBlend } from './blend';
@@ -33,10 +33,9 @@ export function applyAdjustmentOnto(ctx: CanvasRenderingContext2D, w: number, h:
   const a = layer.adjustment!;
   if (!alpha && layer.opacity >= 1) {
     // Fast path (no mask, full opacity): the result is simply the adjusted pixels, so skip the blend scaffolding.
-    const luts = lutsFor(a);
-    if (luts) {
+    if (isPixelAdjustment(a)) {
       const img = ctx.getImageData(0, 0, w, h);
-      applyLUTs(img.data, img.data, luts);
+      applyAdjustmentData(a, img.data);
       ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
       ctx.putImageData(img, 0, 0);
     } else {
@@ -55,11 +54,10 @@ export function applyAdjustmentOnto(ctx: CanvasRenderingContext2D, w: number, h:
   const adj = scratch(6, w, h), ax = ctxOf(adj);
   ax.globalAlpha = 1; ax.globalCompositeOperation = 'source-over'; ax.filter = 'none';
   ax.clearRect(0, 0, w, h);
-  const luts = lutsFor(a);
-  if (luts) {
+  if (isPixelAdjustment(a)) {
     ax.drawImage(base, 0, 0);
     const img = ax.getImageData(0, 0, w, h);
-    applyLUTs(img.data, img.data, luts);
+    applyAdjustmentData(a, img.data);
     ax.putImageData(img, 0, 0);
   } else {
     ax.filter = filterFor(a) ?? 'none'; ax.drawImage(base, 0, 0); ax.filter = 'none';

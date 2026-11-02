@@ -1,13 +1,13 @@
 {
  "read-write__adjustments.psd": {
-  "maxMAE": 8.48,
-  "note": "uses adjustment types that are not rendered yet (see notes)"
+  "maxMAE": 1.5,
+  "note": "Color Lookup (3D LUT) and Selective Color are still hidden placeholders"
  },
  "read-write__effects.psd": {
   "maxMAE": 5.74
  },
  "read-write__masks.psd": {
-  "maxMAE": 2.6
+  "maxMAE": 1.8
  },
  "read-write__stroke.psd": {
   "skip": "this fixture's embedded preview is blank (it was written by ag-psd's test generator), so there is nothing to compare against"

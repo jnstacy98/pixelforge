@@ -13,6 +13,7 @@ import { composite } from './render';
 import { editor } from './texttool';
 import { clearStyle, copyStyle, isStyling, openLayerStyle, pasteStyle } from './stylesdialog';
 import { contentAwareFill, isFilling } from './contentfill';
+import { ADJUSTMENT_LABELS } from './adjust';
 import { autoLevels, editAdjustment, isAdjusting, newAdjustmentLayer, openCurves, openLevels } from './adjustdialog';
 
 // ------------------------------------------------------------------ documents
@@ -162,6 +163,8 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'New Adjustment Layer — Brightness/Contrast…', action: () => newAdjustmentLayer('brightness') },
     { label: 'New Adjustment Layer — Hue/Saturation…', action: () => newAdjustmentLayer('hue') },
     { label: 'New Adjustment Layer — Invert', action: () => newAdjustmentLayer('invert') },
+    ...(['posterize', 'threshold', 'exposure', 'vibrance', 'bw', 'photo', 'balance', 'mixer', 'gradmap'] as const).map((t) =>
+      ({ label: `New Adjustment Layer — ${ADJUSTMENT_LABELS[t]}…`, action: () => newAdjustmentLayer(t) })),
     ...(app.doc.active.adjustment ? [{ label: 'Edit Adjustment…', action: () => editAdjustment(app.doc.active) }] : []),
     '-',
     { label: 'Add Layer Mask — Reveal All', action: () => app.doc.addMask('reveal') },

@@ -103,11 +103,25 @@ export type AdjustmentData =
   | { type: 'curves'; P: Record<Channel, CurvePoint[]> }
   | { type: 'invert' }
   | { type: 'brightness'; b: number; c: number }   // both -100..100
-  | { type: 'hue'; h: number; s: number };         // hue -180..180 deg, saturation -100..100
+  | { type: 'hue'; h: number; s: number }          // hue -180..180 deg, saturation -100..100
+  | { type: 'posterize'; levels: number }          // 2..255
+  | { type: 'threshold'; level: number }           // 1..255
+  | { type: 'exposure'; exposure: number; offset: number; gamma: number }
+  | { type: 'vibrance'; vibrance: number; saturation: number }   // -100..100
+  | { type: 'bw'; w: number[]; tint: RGB | null }                // weights: reds, yellows, greens, cyans, blues, magentas (%)
+  | { type: 'photo'; color: RGB; density: number; lum: boolean } // density 0..100
+  | { type: 'balance'; shadows: Tri; mids: Tri; highs: Tri; lum: boolean }   // each -100..100 (cyan-red, magenta-green, yellow-blue)
+  | { type: 'mixer'; mono: boolean; rows: number[][] }           // rows: out R,G,B (or gray) -> [r,g,b,const] in %
+  | { type: 'gradmap'; stops: GradStop[]; reverse: boolean };
+export type RGB = [number, number, number];
+export type Tri = [number, number, number];
+export interface GradStop { x: number; c: RGB; a: number }
 export type AdjustmentType = AdjustmentData['type'];
 
 export const ADJUSTMENT_LABELS: Record<AdjustmentType, string> = {
   levels: 'Levels', curves: 'Curves', invert: 'Invert', brightness: 'Brightness/Contrast', hue: 'Hue/Saturation',
+  posterize: 'Posterize', threshold: 'Threshold', exposure: 'Exposure', vibrance: 'Vibrance', bw: 'Black & White',
+  photo: 'Photo Filter', balance: 'Color Balance', mixer: 'Channel Mixer', gradmap: 'Gradient Map',
 };
 export const CHANNELS_ALL: Channel[] = ['rgb', 'r', 'g', 'b'];
 
@@ -118,6 +132,15 @@ export function defaultAdjustment(type: AdjustmentType): AdjustmentData {
     case 'invert': return { type };
     case 'brightness': return { type, b: 0, c: 0 };
     case 'hue': return { type, h: 0, s: 0 };
+    case 'posterize': return { type, levels: 4 };
+    case 'threshold': return { type, level: 128 };
+    case 'exposure': return { type, exposure: 0, offset: 0, gamma: 1 };
+    case 'vibrance': return { type, vibrance: 0, saturation: 0 };
+    case 'bw': return { type, w: [40, 60, 40, 60, 20, 80], tint: null };
+    case 'photo': return { type, color: [236, 138, 0], density: 25, lum: true };
+    case 'balance': return { type, shadows: [0, 0, 0], mids: [0, 0, 0], highs: [0, 0, 0], lum: true };
+    case 'mixer': return { type, mono: false, rows: [[100, 0, 0, 0], [0, 100, 0, 0], [0, 0, 100, 0]] };
+    case 'gradmap': return { type, stops: [{ x: 0, c: [0, 0, 0], a: 1 }, { x: 1, c: [255, 255, 255], a: 1 }], reverse: false };
   }
 }
 export const cloneAdjustment = (a: AdjustmentData): AdjustmentData => JSON.parse(JSON.stringify(a));
@@ -138,3 +161,172 @@ export function filterFor(a: AdjustmentData): string | null {
   if (a.type === 'hue') return `hue-rotate(${a.h}deg) saturate(${Math.max(0, 1 + a.s / 100)})`;
   return null;
 }
+
+// ---------------------------------------------------------------- per-pixel adjustments
+const lum255 = (r: number, g: number, b: number) => 0.3 * r + 0.59 * g + 0.11 * b;
+const toLin = (v: number) => Math.pow(v / 255, 2.2), fromLin = (v: number) => 255 * Math.pow(Math.max(0, v), 1 / 2.2);
+
+/** CIE Lab (D50, as Photoshop stores it) -> sRGB 0..255. */
+export function labToRgb(L: number, a: number, b: number): RGB {
+  const fy = (L + 16) / 116, fx = fy + a / 500, fz = fy - b / 200;
+  const f = (t: number) => (t * t * t > 0.008856 ? t * t * t : (t - 16 / 116) / 7.787);
+  const X = 0.9642 * f(fx), Y = f(fy), Z = 0.8249 * f(fz);       // D50 white
+  const rl = 3.1338561 * X - 1.6168667 * Y - 0.4906146 * Z;       // XYZ(D50) -> linear sRGB (Bradford-adapted)
+  const gl = -0.9787684 * X + 1.9161415 * Y + 0.0334540 * Z;
+  const bl = 0.0719453 * X - 0.2289914 * Y + 1.4052427 * Z;
+  const gm = (c: number) => 255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(Math.max(c, 0), 1 / 2.4) - 0.055);
+  return [clamp255(gm(rl)), clamp255(gm(gl)), clamp255(gm(bl))];
+}
+
+/** Colour from a PSD descriptor colour (RGB 0..255, or Lab with normalised a/b). */
+export function psdColorToRgb(c: any): RGB {
+  if (!c) return [0, 0, 0];
+  if ('l' in c) return labToRgb(c.l * 100, c.a < 0 ? c.a * 128 : c.a * 127, c.b < 0 ? c.b * 128 : c.b * 127);
+  if ('r' in c) return [clamp255(c.r), clamp255(c.g), clamp255(c.b)];
+  if ('h' in c) {                                                  // HSB 0..360, 0..100, 0..100 (ag-psd units: h 0..1?)
+    const h = (c.h > 1 ? c.h / 360 : c.h) * 6, s = c.s > 1 ? c.s / 100 : c.s, v = c.b > 1 ? c.b / 100 : c.b;
+    const i = Math.floor(h) % 6, f = h - Math.floor(h), p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+    const [r, g, bb] = [[v, t, p], [q, v, p], [p, v, t], [p, q, v], [t, p, v], [v, p, q]][i];
+    return [r * 255, g * 255, bb * 255];
+  }
+  if ('k' in c && !('c' in c)) { const g = 255 * (1 - c.k / 255); return [g, g, g]; }
+  return [0, 0, 0];
+}
+
+function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d > 0) h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, mx === 0 ? 0 : d / mx, mx / 255];
+}
+
+/** Interpolated colour+alpha of a gradient-map ramp, as a 256-entry table (rgba). */
+export function gradientRamp(stops: GradStop[], reverse: boolean): Uint8ClampedArray {
+  const st = [...stops].sort((p, q) => p.x - q.x), out = new Uint8ClampedArray(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = reverse ? 1 - i / 255 : i / 255;
+    let k = 0;
+    while (k < st.length - 1 && t > st[k + 1].x) k++;
+    const A = st[k], B = st[Math.min(k + 1, st.length - 1)];
+    const u = B.x > A.x ? Math.min(1, Math.max(0, (t - A.x) / (B.x - A.x))) : 0;
+    for (let c = 0; c < 3; c++) out[i * 4 + c] = A.c[c] + (B.c[c] - A.c[c]) * u;
+    out[i * 4 + 3] = 255 * (A.a + (B.a - A.a) * u);
+  }
+  return out;
+}
+
+/** Black & White: grey = min + Σ(weight of the hue segments)·(max−min), the formula Photoshop documents. */
+export function bwGray(r: number, g: number, b: number, w: number[]): number {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  if (d === 0) return mn;
+  const [h] = rgbToHsv(r, g, b);
+  const seg = Math.floor(h / 60) % 6, f = (h - seg * 60) / 60;
+  const wt = (w[seg] * (1 - f) + w[(seg + 1) % 6] * f) / 100;
+  return mn + d * wt;
+}
+
+function balanceWeights(l: number): Tri {      // l: 0..1 luminance -> shadow, mid, highlight weights (sum to 1)
+  return [Math.max(0, 1 - 2 * l), 1 - Math.abs(2 * l - 1), Math.max(0, 2 * l - 1)];
+}
+
+/** Applies a non-LUT, non-CSS-filter adjustment in place. Returns false when `a` is not a per-pixel adjustment. */
+export function applyPixelAdjustment(a: AdjustmentData, d: Uint8ClampedArray): boolean {
+  const n = d.length;
+  switch (a.type) {
+    case 'posterize': {
+      const N = Math.max(2, Math.min(255, Math.round(a.levels))), t = new Uint8ClampedArray(256);
+      for (let v = 0; v < 256; v++) t[v] = Math.round(Math.floor(v / 256 * N) * 255 / (N - 1));
+      for (let i = 0; i < n; i += 4) { d[i] = t[d[i]]; d[i + 1] = t[d[i + 1]]; d[i + 2] = t[d[i + 2]]; }
+      return true;
+    }
+    case 'threshold':
+      for (let i = 0; i < n; i += 4) { const v = lum255(d[i], d[i + 1], d[i + 2]) >= a.level ? 255 : 0; d[i] = d[i + 1] = d[i + 2] = v; }
+      return true;
+    case 'exposure': {
+      const k = Math.pow(2, a.exposure), t = new Uint8ClampedArray(256), ig = 1 / Math.max(0.01, a.gamma);
+      for (let v = 0; v < 256; v++) {
+        const lin = toLin(v) * k + a.offset;
+        t[v] = fromLin(Math.pow(Math.max(0, Math.min(1, lin)), ig));
+      }
+      for (let i = 0; i < n; i += 4) { d[i] = t[d[i]]; d[i + 1] = t[d[i + 1]]; d[i + 2] = t[d[i + 2]]; }
+      return true;
+    }
+    case 'vibrance': {
+      const vb = a.vibrance / 100, sa = a.saturation / 100;
+      for (let i = 0; i < n; i += 4) {
+        let r = d[i], g = d[i + 1], b = d[i + 2];
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b), sat = mx === 0 ? 0 : (mx - mn) / mx, avg = (r + g + b) / 3;
+        const f = Math.max(0, 1 + sa + vb * (1 - sat));                    // vibrance acts mostly on muted colours
+        r = avg + (r - avg) * f; g = avg + (g - avg) * f; b = avg + (b - avg) * f;
+        d[i] = clamp255(r); d[i + 1] = clamp255(g); d[i + 2] = clamp255(b);
+      }
+      return true;
+    }
+    case 'bw': {
+      const tint = a.tint;
+      for (let i = 0; i < n; i += 4) {
+        const gv = clamp255(bwGray(d[i], d[i + 1], d[i + 2], a.w));
+        if (tint) {                                                       // tint ramp: black -> tint colour at its own luminance -> white
+          const lt = Math.max(1, Math.min(254, lum255(tint[0], tint[1], tint[2]))), lo = gv <= lt, m = gv / lt, u = (gv - lt) / (255 - lt);
+          for (let c = 0; c < 3; c++) d[i + c] = clamp255(lo ? tint[c] * m : tint[c] + (255 - tint[c]) * u);
+        } else d[i] = d[i + 1] = d[i + 2] = gv;
+      }
+      return true;
+    }
+    case 'photo': {
+      const dn = a.density / 100, [fr, fg, fb] = a.color;
+      for (let i = 0; i < n; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        let nr = r + (r * fr / 255 - r) * dn, ng = g + (g * fg / 255 - g) * dn, nb = b + (b * fb / 255 - b) * dn;
+        if (a.lum) {
+          const l0 = lum255(r, g, b), l1 = lum255(nr, ng, nb);
+          if (l1 > 0) { const k = l0 / l1; nr *= k; ng *= k; nb *= k; } else { nr = ng = nb = l0; }
+        }
+        d[i] = clamp255(nr); d[i + 1] = clamp255(ng); d[i + 2] = clamp255(nb);
+      }
+      return true;
+    }
+    case 'balance': {
+      for (let i = 0; i < n; i += 4) {
+        const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2], l = lum255(r0, g0, b0) / 255;
+        const [ws, wm, wh] = balanceWeights(l);
+        const dr = (a.shadows[0] * ws + a.mids[0] * wm + a.highs[0] * wh) / 100;
+        const dg = (a.shadows[1] * ws + a.mids[1] * wm + a.highs[1] * wh) / 100;
+        const db = (a.shadows[2] * ws + a.mids[2] * wm + a.highs[2] * wh) / 100;
+        let r = r0 + 127 * dr, g = g0 + 127 * dg, b = b0 + 127 * db;
+        if (a.lum) {
+          const l1 = lum255(r, g, b);
+          if (l1 > 0) { const k = lum255(r0, g0, b0) / l1; r *= k; g *= k; b *= k; }
+        }
+        d[i] = clamp255(r); d[i + 1] = clamp255(g); d[i + 2] = clamp255(b);
+      }
+      return true;
+    }
+    case 'mixer': {
+      const R = a.rows;
+      for (let i = 0; i < n; i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const f = (row: number[]) => clamp255((row[0] * r + row[1] * g + row[2] * b) / 100 + row[3] * 2.55);
+        if (a.mono) { const v = f(R[0]); d[i] = d[i + 1] = d[i + 2] = v; }
+        else { d[i] = f(R[0]); d[i + 1] = f(R[1]); d[i + 2] = f(R[2]); }
+      }
+      return true;
+    }
+    case 'gradmap': {
+      const ramp = gradientRamp(a.stops, a.reverse);
+      for (let i = 0; i < n; i += 4) {
+        const k = Math.round(clamp255(lum255(d[i], d[i + 1], d[i + 2]))) * 4, al = ramp[k + 3] / 255;
+        d[i] = d[i] + (ramp[k] - d[i]) * al; d[i + 1] = d[i + 1] + (ramp[k + 1] - d[i + 1]) * al; d[i + 2] = d[i + 2] + (ramp[k + 2] - d[i + 2]) * al;
+      }
+      return true;
+    }
+    default: return false;
+  }
+}
+/** Applies any adjustment that works on pixel data (LUT or per-pixel). False means it needs the CSS-filter path. */
+export function applyAdjustmentData(a: AdjustmentData, d: Uint8ClampedArray): boolean {
+  const luts = lutsFor(a);
+  if (luts) { applyLUTs(d, d, luts); return true; }
+  return applyPixelAdjustment(a, d);
+}
+export const isPixelAdjustment = (a: AdjustmentData) => a.type !== 'brightness' && a.type !== 'hue';

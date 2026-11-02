@@ -116,7 +116,7 @@ t('brightness/contrast, hue/saturation, invert convert; unsupported types return
   assert.deepEqual(P.fromPsdAdjustment(P.toPsdAdjustment({ type: 'brightness', b: 40, c: 30 })), { type: 'brightness', b: 40, c: 30 });
   assert.deepEqual(P.fromPsdAdjustment(P.toPsdAdjustment({ type: 'hue', h: -40, s: 25 })), { type: 'hue', h: -40, s: 25 });
   assert.deepEqual(P.fromPsdAdjustment({ type: 'invert' }), { type: 'invert' });
-  assert.equal(P.fromPsdAdjustment({ type: 'vibrance', vibrance: 20 }), null);
+  assert.equal(P.fromPsdAdjustment({ type: 'color lookup' }), null);
   assert.equal(P.fromPsdAdjustment({ type: 'selective color' }), null);
 });
 
@@ -464,5 +464,88 @@ ta('performance: 256×256 image with a 60×60 hole fills in a few seconds', asyn
   const t0 = performance.now(); await IP.inpaint(src, w, h, hole); const ms = performance.now() - t0;
   console.log(`      (256×256, 60×60 hole: ${Math.round(ms)} ms)`); assert.ok(ms < 8000, `${ms} ms`);
 });
+
+// ---- per-pixel adjustments
+const px = (a, r, g, b) => { const d = new Uint8ClampedArray([r, g, b, 255]); assert.ok(A.applyAdjustmentData(A.cloneAdjustment(a), d)); return [d[0], d[1], d[2], d[3]]; };
+const def = (t, patch = {}) => Object.assign(A.defaultAdjustment(t), patch);
+t('posterize to 2 levels snaps channels to 0/255; 4 levels gives 0/85/170/255', () => {
+  assert.deepEqual(px(def('posterize', { levels: 2 }), 100, 200, 127), [0, 255, 0, 255]);
+  assert.deepEqual(px(def('posterize', { levels: 4 }), 10, 100, 250), [0, 85, 255, 255]);
+});
+t('threshold uses luminance', () => {
+  assert.deepEqual(px(def('threshold', { level: 128 }), 255, 0, 0), [0, 0, 0, 255]);      // lum 76
+  assert.deepEqual(px(def('threshold', { level: 128 }), 0, 255, 0), [255, 255, 255, 255]); // lum 150
+});
+t('exposure +1 brightens, -1 darkens, identity is exact', () => {
+  assert.deepEqual(px(def('exposure'), 40, 90, 200), [40, 90, 200, 255]);
+  assert.ok(px(def('exposure', { exposure: 1 }), 100, 100, 100)[0] > 100);
+  assert.ok(px(def('exposure', { exposure: -1 }), 100, 100, 100)[0] < 100);
+  assert.deepEqual(px(def('exposure', { exposure: 1 }), 255, 255, 255), [255, 255, 255, 255]);
+});
+t('vibrance boosts muted colours more than saturated ones; greys are untouched', () => {
+  assert.deepEqual(px(def('vibrance', { vibrance: 80 }), 120, 120, 120), [120, 120, 120, 255]);
+  const spread = (c) => Math.max(...c.slice(0, 3)) - Math.min(...c.slice(0, 3));
+  const muted = [130, 120, 110], vivid = [250, 60, 20];
+  assert.ok(spread(px(def('vibrance', { vibrance: 80 }), ...muted)) / spread(muted) > spread(px(def('vibrance', { vibrance: 80 }), ...vivid)) / spread(vivid));
+  assert.ok(spread(px(def('vibrance', { vibrance: -100, saturation: -100 }), ...vivid)) < 2);
+});
+t('black & white weights act per hue; tint colours the greys', () => {
+  const bw = (w) => px(def('bw', { w }), 255, 0, 0)[0];
+  assert.equal(bw([100, 0, 0, 0, 0, 0]), 255); assert.equal(bw([0, 0, 0, 0, 0, 0]), 0); assert.equal(bw([50, 0, 0, 0, 0, 0]), 128);
+  assert.deepEqual(px(def('bw'), 77, 77, 77), [77, 77, 77, 255]);
+  const t1 = px(def('bw', { tint: [225, 211, 179] }), 100, 100, 100);
+  assert.ok(t1[0] > t1[2], 'warm tint');
+});
+t('photo filter at 100% density multiplies by the filter colour; luminosity is kept', () => {
+  assert.deepEqual(px(def('photo', { color: [255, 128, 0], density: 100, lum: false }), 200, 200, 200), [200, 100, 0, 255]);
+  const lum = (c) => 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+  const out = px(def('photo', { color: [220, 170, 110], density: 60, lum: true }), 120, 160, 90);
+  assert.ok(Math.abs(lum(out) - lum([120, 160, 90])) < 3);
+});
+t('colour balance pushes towards red/green/blue by tonal range', () => {
+  const mid = px(def('balance', { mids: [50, 0, 0], lum: false }), 128, 128, 128);
+  assert.ok(mid[0] > 128 + 20 && mid[1] === 128);
+  const dark = px(def('balance', { mids: [50, 0, 0], lum: false }), 0, 0, 0);
+  assert.deepEqual(dark, [0, 0, 0, 255]);                                             // midtone edit leaves pure black alone
+  assert.ok(px(def('balance', { shadows: [0, 0, 60], lum: false }), 10, 10, 10)[2] > 40);
+  assert.deepEqual(px(def('balance'), 50, 100, 150), [50, 100, 150, 255]);
+});
+t('channel mixer: identity, swap, monochrome', () => {
+  assert.deepEqual(px(def('mixer'), 10, 20, 30), [10, 20, 30, 255]);
+  assert.deepEqual(px(def('mixer', { rows: [[0, 0, 100, 0], [0, 100, 0, 0], [100, 0, 0, 0]] }), 10, 20, 30), [30, 20, 10, 255]);
+  assert.deepEqual(px(def('mixer', { mono: true, rows: [[0, 100, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] }), 10, 20, 30), [20, 20, 20, 255]);
+});
+t('gradient map maps luminance onto the ramp (and reverse flips it)', () => {
+  const g = def('gradmap', { stops: [{ x: 0, c: [0, 0, 100], a: 1 }, { x: 1, c: [255, 100, 0], a: 1 }] });
+  assert.deepEqual(px(g, 0, 0, 0), [0, 0, 100, 255]); assert.deepEqual(px(g, 255, 255, 255), [255, 100, 0, 255]);
+  assert.deepEqual(px({ ...g, reverse: true }, 0, 0, 0), [255, 100, 0, 255]);
+  const half = def('gradmap', { stops: [{ x: 0, c: [0, 0, 0], a: 0 }, { x: 1, c: [0, 0, 0], a: 0 }] });
+  assert.deepEqual(px(half, 90, 80, 70), [90, 80, 70, 255]);                           // fully transparent ramp leaves pixels alone
+});
+t('Lab (D50) to sRGB: white, black, mid grey and a saturated blue', () => {
+  const w = A.labToRgb(100, 0, 0), k = A.labToRgb(0, 0, 0), g = A.labToRgb(53.4, 0, 0);
+  assert.ok(w.every((v) => v > 253)); assert.ok(k.every((v) => v < 2)); assert.ok(g.every((v) => Math.abs(v - 128) < 4));
+  const b = A.labToRgb(45, 18, -123); assert.ok(b[2] > 200 && b[0] < 80);
+});
+t('new adjustment types survive a PSD conversion round trip', () => {
+  const cases = [def('posterize', { levels: 7 }), def('threshold', { level: 90 }), def('exposure', { exposure: 1.5, offset: -0.02, gamma: 0.8 }),
+    def('vibrance', { vibrance: 30, saturation: -10 }), def('bw', { w: [10, 20, 30, 40, 50, 60], tint: [200, 150, 100] }),
+    def('photo', { color: [10, 200, 30], density: 40, lum: false }), def('balance', { shadows: [1, 2, 3], mids: [4, 5, 6], highs: [7, 8, 9], lum: false }),
+    def('mixer', { mono: false, rows: [[90, 5, 5, 0], [0, 100, 0, 10], [0, 0, 100, 0]] }),
+    def('mixer', { mono: true, rows: [[30, 60, 10, 0], [0, 100, 0, 0], [0, 0, 100, 0]] }),
+    def('gradmap', { stops: [{ x: 0, c: [10, 20, 30], a: 1 }, { x: 0.4, c: [100, 50, 0], a: 0.5 }, { x: 1, c: [255, 255, 255], a: 1 }], reverse: true })];
+  for (const c of cases) {
+    const back = P.fromPsdAdjustment(P.toPsdAdjustment(c));
+    assert.deepEqual(JSON.parse(JSON.stringify(back)), JSON.parse(JSON.stringify(c)), c.type);
+  }
+});
+t('PSD Lab colours (Photo Filter) import as sRGB', () => {
+  const a = P.fromPsdAdjustment({ type: 'photo filter', color: { l: 0.45, a: 0.1417, b: -0.9609 }, density: 0.25, preserveLuminosity: true });
+  assert.equal(a.type, 'photo'); assert.ok(a.color[2] > 180 && a.color[0] < 90); assert.equal(a.density, 25);
+});
+t('noise gradient maps are not imported (reported as unsupported)', () => {
+  assert.equal(P.fromPsdAdjustment({ type: 'gradient map', gradientType: 'noise' }), null);
+});
+
 for (const [name, fn] of asyncTests) { await fn(); n++; console.log(`  ✓ ${name}`); }
 console.log(`\n${n} unit tests passed`);

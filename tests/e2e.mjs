@@ -438,6 +438,59 @@ assert.equal(by.Inv.adj.type, 'invert'); assert.deepEqual([by.Hu.adj.h, by.Hu.ad
 assert.ok(by.Lv.hasMask); assert.equal(rt.notes.length, 0); ok('PSD round-trip: adjustment layers keep a mask and import without warnings');
 
 
+// 6e2. per-pixel adjustment layers (Posterize, Threshold, Exposure, Vibrance, B&W, Photo Filter, Color Balance, Channel Mixer, Gradient Map)
+const pset = (k, v) => page.evaluate(([k, v]) => document.querySelector('.adjust-body').__params.set(k, v), [k, v]);
+await newGray([100, 150, 200]);
+await addAdj('Posterize'); await page.waitForSelector('.adjust-panel');
+await pset('levels', 2);
+assert.deepEqual(await view(), [0, 255, 255]); ok('Posterize adjustment layer (2 levels) snaps channels live');
+await page.keyboard.press('Enter'); await wait();
+assert.equal((await adjOf()).levels, 2); ok('Posterize dialog OK stores its parameters on the layer');
+await page.keyboard.press('Control+z'); await wait();
+assert.equal((await adjOf()).levels, 4); await page.keyboard.press('Control+z'); await wait();
+assert.equal(await nLayers(), 1); ok('undo steps back through the Posterize edit, then the layer creation');
+
+await newGray([100, 150, 200]);
+await addAdj('Threshold'); await page.waitForSelector('.adjust-panel');
+await pset('level', 140);
+assert.deepEqual(await view(), [255, 255, 255]); ok('Threshold adjustment layer (luminance 140 ≥ 140)');
+await pset('level', 200);
+assert.deepEqual(await view(), [0, 0, 0]); ok('Threshold dialog preview updates as the slider moves');
+await page.keyboard.press('Escape'); await wait();
+assert.equal(await nLayers(), 1); ok('Cancel on a fresh adjustment layer removes it again');
+
+await newGray([200, 100, 50]);
+await addAdj('Channel Mixer'); await page.waitForSelector('.adjust-panel');
+await pset('mono', true);
+await pset('rows.0.0', 0); await pset('rows.0.1', 100); await pset('rows.0.2', 0);
+assert.deepEqual(await view(), [100, 100, 100]); ok('Channel Mixer monochrome with 100% green gives the green channel as grey');
+await page.keyboard.press('Enter'); await wait();
+// at partial opacity and through a mask the adjusted result blends with what is below
+await page.evaluate(() => { window.__app.doc.active.opacity = 0.5; window.__app.doc.emit('structure'); });
+const adjHalf = await view(); assert.ok(Math.abs(adjHalf[0] - 150) <= 2 && Math.abs(adjHalf[1] - 100) <= 2, `got ${adjHalf}`); ok('per-pixel adjustment layers honour layer opacity');
+
+await newGray([30, 30, 30]);
+await addAdj('Gradient Map'); await page.waitForSelector('.adjust-panel');
+await page.evaluate(() => { const g = document.querySelector('.adjust-body').__params.get(); g.stops = [{ x: 0, c: [255, 0, 0], a: 1 }, { x: 1, c: [0, 0, 255], a: 1 }]; document.querySelector('.adjust-body').__params.set('stops', null); });
+const gm = await view(); assert.ok(gm[0] > gm[2] && gm[0] > 150, `got ${gm}`); ok('Gradient Map maps dark pixels to the first stop');
+await pset('reverse', true);
+const gm2 = await view(); assert.ok(gm2[2] > gm2[0], `got ${gm2}`); ok('Gradient Map reverse flips the ramp');
+await page.keyboard.press('Enter'); await wait();
+
+// PSD round trip keeps the new types
+await newGray([90, 120, 200]);
+await page.evaluate(() => {
+  const d = window.__app.doc, A = (t, name, patch) => { const l = d.addAdjustmentLayer(window.__defaultAdj(t), name); patch(l.adjustment); return l; };
+  A('exposure', 'Ex', (a) => { a.exposure = 1.2; a.gamma = 0.9; }); A('vibrance', 'Vb', (a) => { a.vibrance = 35; });
+  A('balance', 'Cb', (a) => { a.mids = [10, -20, 30]; }); A('photo', 'Pf', (a) => { a.color = [20, 120, 220]; a.density = 33; });
+  A('gradmap', 'Gm', (a) => { a.stops = [{ x: 0, c: [0, 0, 10], a: 1 }, { x: 1, c: [250, 200, 0], a: 1 }]; });
+});
+const rt2 = await page.evaluate(() => window.__adjRoundtrip());
+const by2 = Object.fromEntries(rt2.layers.map((l) => [l.name, l]));
+assert.ok(Math.abs(by2.Ex.adj.exposure - 1.2) < 1e-4); assert.equal(by2.Vb.adj.vibrance, 35); assert.deepEqual(by2.Cb.adj.mids, [10, -20, 30]);
+assert.equal(by2.Pf.adj.density, 33); assert.deepEqual(by2.Gm.adj.stops.map((q) => q.c), [[0, 0, 10], [250, 200, 0]]);
+assert.equal(rt2.notes.length, 0); ok('PSD round-trip: Exposure, Vibrance, Color Balance, Photo Filter and Gradient Map keep their parameters');
+
 // 6f. clone stamp
 const cl = async (fn) => page.evaluate(fn);
 const CS = { x: 40, y: 40 };  // red square 50..100 / 50..100 on a white layer

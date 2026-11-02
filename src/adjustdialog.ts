@@ -374,6 +374,103 @@ function slidersDialog(title: string, sess: Sess, defs: { key: string; label: st
   });
 }
 
+// ---------------------------------------------------------------- parameter dialogs (layer mode only)
+type Path = (string | number)[];
+type Field =
+  | { kind: 'range'; label: string; path: Path; min: number; max: number; step?: number }
+  | { kind: 'check'; label: string; path: Path }
+  | { kind: 'color'; label: string; path: Path }
+  | { kind: 'optcolor'; label: string; path: Path; def: A.RGB }     // nullable colour with an enable checkbox
+  | { kind: 'stops' };
+const FIELDS = (a: A.AdjustmentData): Field[] => {
+  const r = (label: string, path: Path, min: number, max: number, step = 1): Field => ({ kind: 'range', label, path, min, max, step });
+  switch (a.type) {
+    case 'posterize': return [r('Levels', ['levels'], 2, 255)];
+    case 'threshold': return [r('Threshold', ['level'], 1, 255)];
+    case 'exposure': return [r('Exposure', ['exposure'], -20, 20, 0.05), r('Offset', ['offset'], -0.5, 0.5, 0.0005), r('Gamma', ['gamma'], 0.1, 9.99, 0.01)];
+    case 'vibrance': return [r('Vibrance', ['vibrance'], -100, 100), r('Saturation', ['saturation'], -100, 100)];
+    case 'bw': return [r('Reds', ['w', 0], -200, 300), r('Yellows', ['w', 1], -200, 300), r('Greens', ['w', 2], -200, 300), r('Cyans', ['w', 3], -200, 300), r('Blues', ['w', 4], -200, 300), r('Magentas', ['w', 5], -200, 300), { kind: 'optcolor', label: 'Tint', path: ['tint'], def: [225, 211, 179] }];
+    case 'photo': return [{ kind: 'color', label: 'Color', path: ['color'] }, r('Density %', ['density'], 1, 100), { kind: 'check', label: 'Preserve Luminosity', path: ['lum'] }];
+    case 'balance': return [
+      ...(['shadows', 'mids', 'highs'] as const).flatMap((k) => [
+        r(`${k === 'mids' ? 'Midtones' : k[0].toUpperCase() + k.slice(1)}: Cyan–Red`, [k, 0], -100, 100), r('Magenta–Green', [k, 1], -100, 100), r('Yellow–Blue', [k, 2], -100, 100)]),
+      { kind: 'check', label: 'Preserve Luminosity', path: ['lum'] }];
+    case 'mixer': return [
+      { kind: 'check', label: 'Monochrome', path: ['mono'] },
+      ...(a.mono ? [['Gray', 0]] : [['Red', 0], ['Green', 1], ['Blue', 2]]).flatMap(([n, i]) => [
+        r(`${n} ← Red`, ['rows', i as number, 0], -200, 200), r(`${n} ← Green`, ['rows', i as number, 1], -200, 200), r(`${n} ← Blue`, ['rows', i as number, 2], -200, 200), r(`${n} const`, ['rows', i as number, 3], -100, 100)])];
+    case 'gradmap': return [{ kind: 'check', label: 'Reverse', path: ['reverse'] }, { kind: 'stops' }];
+    default: return [];
+  }
+};
+const getAt = (o: any, p: Path) => p.reduce((x, k) => x[k], o);
+const setAt = (o: any, p: Path, v: any) => { getAt(o, p.slice(0, -1))[p[p.length - 1]] = v; };
+const hex = (c: A.RGB) => '#' + c.map((v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0')).join('');
+const unhex = (h: string): A.RGB => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as A.RGB;
+
+function paramsDialog(title: string, sess: Sess, init: A.AdjustmentData) {
+  openAdjust(title, title, sess, (preview) => {
+    let cur = A.cloneAdjustment(init);
+    const host = el('div', { class: 'adjust-body' });
+    const ctl: Record<string, (v: any) => void> = {};
+    const build = () => {
+      host.replaceChildren();
+      for (const f of FIELDS(cur)) {
+        if (f.kind === 'range') {
+          const key = f.path.join('.'), v0 = getAt(cur, f.path) as number;
+          const rg = el('input', { type: 'range', min: String(f.min), max: String(f.max), step: String(f.step ?? 1), value: String(v0) });
+          const n = numField(f.min, f.max, f.step ?? 1, (x) => { setAt(cur, f.path, x); rg.value = String(x); preview(); });
+          n.value = String(v0); n.style.width = '72px';
+          rg.oninput = () => { setAt(cur, f.path, Number(rg.value)); n.value = rg.value; preview(); };
+          ctl[key] = (x) => { setAt(cur, f.path, x); rg.value = n.value = String(x); preview(); };
+          host.append(el('div', { class: 'row' }, el('span', { textContent: f.label, style: 'width:130px' } as any), rg, n));
+        } else if (f.kind === 'check') {
+          const c = el('input', { type: 'checkbox', checked: !!getAt(cur, f.path) });
+          c.onchange = () => { setAt(cur, f.path, c.checked); if (f.path[0] === 'mono') build(); preview(); };
+          ctl[f.path.join('.')] = (x) => { setAt(cur, f.path, !!x); c.checked = !!x; if (f.path[0] === 'mono') build(); preview(); };
+          host.append(el('label', { class: 'row' }, c, ' ' + f.label));
+        } else if (f.kind === 'color' || f.kind === 'optcolor') {
+          const v = getAt(cur, f.path) as A.RGB | null, c = el('input', { type: 'color', value: hex(v ?? (f as any).def ?? [0, 0, 0]) });
+          const on = f.kind === 'optcolor' ? el('input', { type: 'checkbox', checked: !!v }) : null;
+          const upd = () => { setAt(cur, f.path, on && !on.checked ? null : unhex(c.value)); preview(); };
+          c.oninput = upd; if (on) on.onchange = upd;
+          ctl[f.path.join('.')] = (x) => { setAt(cur, f.path, x); c.value = hex(x ?? (f as any).def); if (on) on.checked = !!x; preview(); };
+          host.append(el('div', { class: 'row' }, ...(on ? [on] : []), ' ' + f.label + ' ', c));
+        } else if (cur.type === 'gradmap') stopsEditor();
+      }
+    };
+    const stopsEditor = () => {
+      const g = cur as Extract<A.AdjustmentData, { type: 'gradmap' }>, box = el('div', { class: 'stops' });
+      const bar = el('div', { class: 'gradbar', style: 'height:16px;border:1px solid #555;margin:4px 0' } as any);
+      const paint = () => {
+        const st = [...g.stops].sort((a, b) => a.x - b.x);
+        bar.style.background = `linear-gradient(${g.reverse ? 270 : 90}deg, ${st.map((s) => `rgba(${s.c.map(Math.round).join(',')},${s.a}) ${Math.round(s.x * 100)}%`).join(',')})`;
+      };
+      const rows = () => {
+        box.replaceChildren();
+        g.stops.forEach((s, i) => {
+          const c = el('input', { type: 'color', value: hex(s.c) }), pos = numField(0, 100, 1, (x) => { s.x = x / 100; paint(); preview(); }), op = numField(0, 100, 1, (x) => { s.a = x / 100; paint(); preview(); });
+          pos.value = String(Math.round(s.x * 100)); op.value = String(Math.round(s.a * 100));
+          c.oninput = () => { s.c = unhex(c.value); paint(); preview(); };
+          const del = el('button', { type: 'button', textContent: '✕', disabled: g.stops.length <= 2 });
+          del.onclick = () => { g.stops.splice(i, 1); rows(); paint(); preview(); };
+          box.append(el('div', { class: 'row' }, c, ' at ', pos, '% opacity ', op, '% ', del));
+        });
+        const add = el('button', { type: 'button', textContent: 'Add stop' });
+        add.onclick = () => { g.stops.push({ x: 0.5, c: [128, 128, 128], a: 1 }); rows(); paint(); preview(); };
+        box.append(add);
+      };
+      rows(); paint(); host.append(bar, box);
+      ctl.stops = () => { rows(); paint(); preview(); };
+    };
+    build();
+    (host as any).__params = { get: () => cur, set: (k: string, v: any) => ctl[k]?.(v) };
+    const reset = () => { cur = A.defaultAdjustment(init.type); build(); };
+    const flat = { r: new Uint8ClampedArray(256), g: new Uint8ClampedArray(256), b: new Uint8ClampedArray(256) };
+    return { el: host, luts: () => flat, state: () => A.cloneAdjustment(cur), reset };
+  });
+}
+
 // ---------------------------------------------------------------- adjustment layers
 /** Create a new adjustment layer above the active layer and open its settings (Invert has none). */
 export function newAdjustmentLayer(type: A.AdjustmentType) {
@@ -397,5 +494,6 @@ function openFor(layer: Layer, fresh: boolean) {
       return slidersDialog('Brightness/Contrast', s, [{ key: 'b', label: 'Brightness', min: -100, max: 100 }, { key: 'c', label: 'Contrast', min: -100, max: 100 }], (v) => ({ type: 'brightness', b: v.b, c: v.c }), { b: a.b, c: a.c });
     case 'hue':
       return slidersDialog('Hue/Saturation', s, [{ key: 'h', label: 'Hue', min: -180, max: 180 }, { key: 's', label: 'Saturation', min: -100, max: 100 }], (v) => ({ type: 'hue', h: v.h, s: v.s }), { h: a.h, s: a.s });
+    default: return paramsDialog(A.ADJUSTMENT_LABELS[a.type], s, a);
   }
 }
