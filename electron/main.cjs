@@ -16,6 +16,11 @@ function createWindow() {
   });
   Menu.setApplicationMenu(null); // the app draws its own menus
   if (dev) win.loadURL('http://localhost:5173'); else win.loadFile(path.join(__dirname, '../dist/index.html'));
+  // The renderer cancels `beforeunload` while any document has unsaved changes. Browsers turn that into a prompt,
+  // but Electron just silently refuses to close. So the close is held here and the renderer is asked to run the
+  // Save / Don't Save / Cancel prompt (it knows which documents are unsaved and how to save them); it calls
+  // `quit-confirm` to show the dialog and `quit-force` once it is safe to go.
+  win.webContents.on('will-prevent-unload', () => win.webContents.send('quit-requested'));
   const initial = fileArg(process.argv);
   if (initial) win.webContents.once('did-finish-load', async () => win.webContents.send('open-path', await readFile(initial)));
 }
@@ -75,6 +80,17 @@ ipcMain.handle('update-download', async () => {
   try { await getUpdater().downloadUpdate(); } catch (e) { sendUpdate({ state: 'error', message: String((e && e.message) || e).split('\n')[0] }); }
 });
 ipcMain.handle('update-install', () => { if (canSelfUpdate) getUpdater().quitAndInstall(false, true); });
+ipcMain.handle('quit', () => { if (win && !win.isDestroyed()) win.close(); }); // same path as the X button
+ipcMain.handle('quit-confirm', (_e, names) => {
+  const list = Array.isArray(names) ? names.map(String) : [];
+  const one = list.length === 1;
+  return dialog.showMessageBox(win, {
+    type: 'warning', buttons: ['Save', "Don't Save", 'Cancel'], defaultId: 0, cancelId: 2, noLink: true, title: 'Unsaved Changes',
+    message: one ? `Save changes to "${list[0]}" before quitting?` : `Save changes to ${list.length} documents before quitting?`,
+    detail: (one ? '' : list.map((n) => '• ' + n).join('\n') + '\n\n') + "Your changes will be lost if you don't save them.",
+  }).then((r) => ['save', 'discard', 'cancel'][r.response] || 'cancel');
+});
+ipcMain.handle('quit-force', () => { if (win && !win.isDestroyed()) win.destroy(); }); // skips beforeunload
 ipcMain.handle('open-external', (_e, url) => {
   // only ever open pages of this project, never an arbitrary URL from the renderer
   if (typeof url === 'string' && (url === REPO || url.startsWith(REPO + '/'))) return shell.openExternal(url);

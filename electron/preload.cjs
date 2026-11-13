@@ -7,6 +7,10 @@ contextBridge.exposeInMainWorld('native', {
   checkForUpdates: () => ipcRenderer.invoke('update-check'),
   downloadUpdate: () => ipcRenderer.invoke('update-download'),
   installUpdate: () => ipcRenderer.invoke('update-install'),
+  quit: () => ipcRenderer.invoke('quit'),
+  onQuitRequested: (cb) => ipcRenderer.on('quit-requested', () => cb()),
+  confirmQuit: (names) => ipcRenderer.invoke('quit-confirm', names),
+  forceQuit: () => ipcRenderer.invoke('quit-force'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_e, s) => cb(s)),
 });

@@ -106,6 +106,7 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Export TIFF…', action: () => exportAs('tiff') },
     '-',
     { label: 'Close', shortcut: 'Ctrl+W', action: () => closeDoc(app.docs.indexOf(app.doc)) },
+    ...(window.native?.quit ? ['-' as const, { label: 'Exit', shortcut: 'Ctrl+Q', action: () => void window.native!.quit!() }] : []),
   ] },
   { title: 'Edit', items: () => {
     const h = app.doc.history;
@@ -291,6 +292,7 @@ window.addEventListener('keydown', (e) => {
       o: async () => openFiles(await pickFiles()),
       s: () => exportAs(e.shiftKey ? 'png' : 'psd'),
       w: () => closeDoc(app.docs.indexOf(doc)),
+      q: () => void window.native?.quit?.(),
       j: () => doc.duplicateLayer(),
       g: () => (e.shiftKey ? doc.ungroup(doc.active.isGroup ? doc.active : doc.active.parent ?? doc.active) : doc.groupLayers()),
       e: () => doc.mergeDown(),
@@ -335,6 +337,28 @@ window.addEventListener('drop', async (e) => {
 
 // ------------------------------------------------------------------ boot
 window.addEventListener('beforeunload', (e) => { if (app.docs.some((d) => d.history.dirty)) e.preventDefault(); });
+// Desktop app: quitting with unsaved work (X button, File ▸ Exit) lands here — Save / Don't Save / Cancel.
+let quitting = false;
+window.native?.onQuitRequested?.(async () => {
+  const n = window.native!;
+  if (quitting || !n.confirmQuit || !n.forceQuit) return;
+  quitting = true;
+  try {
+    const dirty = app.docs.filter((d) => d.history.dirty);
+    if (!dirty.length) return void (await n.forceQuit());
+    const choice = await n.confirmQuit(dirty.map((d) => d.name));
+    if (choice === 'cancel') return;
+    if (choice === 'save') {
+      for (const d of dirty) {
+        switchTo(app.docs.indexOf(d)); // show which document is being saved
+        let saved = false;
+        try { saved = await saveAs(d, 'psd'); } catch (e) { app.toast('Save failed: ' + (e as Error).message); }
+        if (!saved || d.history.dirty) { refresh(); return; } // cancelled or failed: stay open
+      }
+    }
+    await n.forceQuit();
+  } finally { quitting = false; }
+});
 loadSavedTips();
 app.view = new Viewer(document.getElementById('stage')!);
 app.view.onStatus = renderStatus;

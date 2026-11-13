@@ -62,7 +62,7 @@ export const GUIDE: Topic[] = [
 
 export const SHORTCUTS: [string, [string, string][]][] = [
   ['Tools', [['V', 'Move'], ['M', 'Marquee'], ['L', 'Lasso (press again: freehand ⇄ polygonal)'], ['Q', 'Quick selection'], ['W', 'Magic wand'], ['B', 'Brush'], ['S', 'Clone stamp'], ['J', 'Healing brush'], ['P', 'Patch'], ['K', 'Spot healing'], ['E', 'Eraser'], ['G', 'Bucket'], ['D', 'Gradient'], ['T', 'Text'], ['I', 'Eyedropper'], ['H', 'Hand'], ['[  ]', 'Brush size smaller / larger'], ['X', 'Swap foreground / background'], ['Space + drag', 'Pan']]],
-  ['File', [['Ctrl+N', 'New document'], ['Ctrl+O', 'Open'], ['Ctrl+S', 'Save as PSD'], ['Ctrl+Shift+S', 'Export PNG'], ['Ctrl+W', 'Close']]],
+  ['File', [['Ctrl+N', 'New document'], ['Ctrl+O', 'Open'], ['Ctrl+S', 'Save as PSD'], ['Ctrl+Shift+S', 'Export PNG'], ['Ctrl+W', 'Close'], ['Ctrl+Q', 'Exit']]],
   ['Edit', [['Ctrl+Z', 'Undo'], ['Ctrl+Shift+Z / Ctrl+Y', 'Redo'], ['Ctrl+T', 'Free transform'], ['Shift+F5', 'Content-aware fill'], ['Ctrl+A', 'Select all'], ['Ctrl+D', 'Deselect'], ['Ctrl+Shift+I', 'Invert selection']]],
   ['Layers', [['Ctrl+Shift+N', 'New layer'], ['Ctrl+J', 'Duplicate layer'], ['Ctrl+G', 'Group layers'], ['Ctrl+Shift+G', 'Ungroup'], ['Ctrl+Alt+G', 'Clipping mask'], ['Ctrl+E', 'Merge down']]],
   ['Adjust & View', [['Ctrl+L', 'Levels'], ['Ctrl+M', 'Curves'], ['Ctrl+Shift+L', 'Auto levels'], ['Ctrl+I', 'Invert'], ['Ctrl+0', 'Fit on screen'], ['Ctrl+1', 'Actual pixels'], ['Ctrl+ =  /  Ctrl+ -', 'Zoom in / out']]],
