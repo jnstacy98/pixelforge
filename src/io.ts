@@ -37,6 +37,7 @@ declare global {
       downloadUpdate?(): Promise<void>;
       installUpdate?(): Promise<void>;
       openExternal?(url: string): Promise<void>;
+      quit?(): Promise<void>;
       onUpdateStatus?(cb: (s: UpdateStatus) => void): void;
     };
   }

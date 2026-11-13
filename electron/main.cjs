@@ -16,6 +16,15 @@ function createWindow() {
   });
   Menu.setApplicationMenu(null); // the app draws its own menus
   if (dev) win.loadURL('http://localhost:5173'); else win.loadFile(path.join(__dirname, '../dist/index.html'));
+  // The renderer cancels `beforeunload` while any document has unsaved changes. Browsers turn that into a prompt,
+  // but Electron just silently refuses to close — so ask here, and let the close go ahead if the user agrees.
+  win.webContents.on('will-prevent-unload', (e) => {
+    const choice = dialog.showMessageBoxSync(win, {
+      type: 'warning', buttons: ['Quit Without Saving', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true,
+      title: 'Unsaved Changes', message: 'You have unsaved changes.', detail: 'Quit PixelForge anyway? Your unsaved changes will be lost.',
+    });
+    if (choice === 0) e.preventDefault(); // preventDefault here means "ignore beforeunload and close"
+  });
   const initial = fileArg(process.argv);
   if (initial) win.webContents.once('did-finish-load', async () => win.webContents.send('open-path', await readFile(initial)));
 }
@@ -75,6 +84,7 @@ ipcMain.handle('update-download', async () => {
   try { await getUpdater().downloadUpdate(); } catch (e) { sendUpdate({ state: 'error', message: String((e && e.message) || e).split('\n')[0] }); }
 });
 ipcMain.handle('update-install', () => { if (canSelfUpdate) getUpdater().quitAndInstall(false, true); });
+ipcMain.handle('quit', () => { if (win && !win.isDestroyed()) win.close(); }); // same path as the X button
 ipcMain.handle('open-external', (_e, url) => {
   // only ever open pages of this project, never an arbitrary URL from the renderer
   if (typeof url === 'string' && (url === REPO || url.startsWith(REPO + '/'))) return shell.openExternal(url);

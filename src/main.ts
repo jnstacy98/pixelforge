@@ -106,6 +106,7 @@ const menus: { title: string; items: () => Item[] }[] = [
     { label: 'Export TIFF…', action: () => exportAs('tiff') },
     '-',
     { label: 'Close', shortcut: 'Ctrl+W', action: () => closeDoc(app.docs.indexOf(app.doc)) },
+    ...(window.native?.quit ? ['-' as const, { label: 'Exit', shortcut: 'Ctrl+Q', action: () => void window.native!.quit!() }] : []),
   ] },
   { title: 'Edit', items: () => {
     const h = app.doc.history;
@@ -291,6 +292,7 @@ window.addEventListener('keydown', (e) => {
       o: async () => openFiles(await pickFiles()),
       s: () => exportAs(e.shiftKey ? 'png' : 'psd'),
       w: () => closeDoc(app.docs.indexOf(doc)),
+      q: () => void window.native?.quit?.(),
       j: () => doc.duplicateLayer(),
       g: () => (e.shiftKey ? doc.ungroup(doc.active.isGroup ? doc.active : doc.active.parent ?? doc.active) : doc.groupLayers()),
       e: () => doc.mergeDown(),
