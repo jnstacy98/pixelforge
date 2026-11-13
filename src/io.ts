@@ -38,6 +38,9 @@ declare global {
       installUpdate?(): Promise<void>;
       openExternal?(url: string): Promise<void>;
       quit?(): Promise<void>;
+      onQuitRequested?(cb: () => void): void;
+      confirmQuit?(names: string[]): Promise<'save' | 'discard' | 'cancel'>;
+      forceQuit?(): Promise<void>;
       onUpdateStatus?(cb: (s: UpdateStatus) => void): void;
     };
   }
@@ -227,7 +230,8 @@ export async function saveAs(doc: Doc, fmt: ExportFormat, quality?: number): Pro
   const ext = fmt === 'jpeg' ? 'jpg' : fmt === 'tiff' ? 'tif' : fmt;
   const filename = `${doc.name}.${ext}`;
   if (window.native) {
-    const p = await window.native.save(filename, ext, data);
+    // re-saving a PSD that came from disk offers its original location
+    const p = await window.native.save(fmt === 'psd' && doc.path?.toLowerCase().endsWith('.psd') ? doc.path : filename, ext, data);
     if (!p) return false;
     if (fmt === 'psd') { doc.path = p; doc.history.dirty = false; }
     return true;
