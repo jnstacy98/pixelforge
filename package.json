@@ -1,7 +1,7 @@
 {
   "name": "pixelforge",
   "productName": "PixelForge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A Photoshop-inspired desktop image editor with layers, brushes and PSD support",
   "main": "electron/main.cjs",
   "type": "module",
@@ -61,7 +61,7 @@
         "name": "WebP Image"
       }
     ],
-    "copyright": "Copyright \u00a9 2026 PixelForge contributors",
+    "copyright": "Copyright © 2026 PixelForge contributors",
     "directories": {
       "buildResources": "build",
       "output": "release"
