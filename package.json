@@ -72,7 +72,7 @@
         "provider": "github",
         "owner": "jnstacy98",
         "repo": "pixelforge",
-        "releaseType": "release"
+        "releaseType": "draft"
       }
     ],
     "nsis": {
