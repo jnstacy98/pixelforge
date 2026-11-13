@@ -78,8 +78,8 @@ The installer isn't code-signed yet, so Windows SmartScreen may say "Windows pro
 
 ### Publishing an update (maintainers)
 1. Bump `version` in `package.json` and commit.
-2. `git tag v0.2.0 && git push origin v0.2.0` — the *Release* workflow (`.github/workflows/release.yml`) builds on Windows and attaches the installer, portable exe and `latest.yml` to a GitHub release. (Or locally: `GH_TOKEN=… npx electron-builder --win --publish always`.)
-3. Installed copies pick it up from **Help ▸ Check for Updates…**. The release must be published (not a draft) and its tag must match the `package.json` version.
+2. `git tag v0.2.0 && git push origin v0.2.0` — the *Release* workflow (`.github/workflows/release.yml`) creates a draft release, builds on Windows, uploads the installer, portable exe, blockmap and `latest.yml` into it, checks they are all there, and only then publishes it. If a file is missing the release stays a draft and the run fails. (Don't create the release on GitHub by hand first. Publishing locally with `GH_TOKEN=… npx electron-builder --win --publish always` leaves a draft you publish yourself.)
+3. Installed copies pick it up from **Help ▸ Check for Updates…**. The release must be published (not a draft), its tag must match the `package.json` version, and there must be only one release per tag.
 
 ## Development
 
